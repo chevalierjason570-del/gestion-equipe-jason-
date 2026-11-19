@@ -37,9 +37,15 @@ export async function POST(request: Request) {
       .maybeSingle();
 
     if (profileError) {
-      throw new Error("Erreur recherche profil");
-    }
+  console.error("SUPABASE_PROFILE_ERROR:", {
+    code: profileError.code,
+    message: profileError.message,
+    details: profileError.details,
+    hint: profileError.hint,
+  });
 
+  throw new Error("Erreur recherche profil");
+}
     if (!profile) {
       return NextResponse.json(
         { error: "Identifiant ou mot de passe incorrect." },
