@@ -1,29 +1,59 @@
+
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { supabase } from "@/lib/supabase";
 
 export default function Home() {
-  const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [loggedIn, setLoggedIn] = useState(false);
+  const [user, setUser] = useState<any>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  function login(e: React.FormEvent) {
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setUser(data.session?.user ?? null);
+    });
+
+    const { data: listener } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        setUser(session?.user ?? null);
+      }
+    );
+
+    return () => listener.subscription.unsubscribe();
+  }, []);
+
+  async function login(e: React.FormEvent) {
     e.preventDefault();
+    setLoading(true);
+    setError("");
 
-    if (username === "admin" && password === "admin123") {
-      setLoggedIn(true);
-    } else {
-      alert("Identifiant ou mot de passe incorrect.");
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (error) {
+      setError("Identifiant ou mot de passe incorrect.");
     }
+
+    setLoading(false);
   }
 
-  if (loggedIn) {
+  async function logout() {
+    await supabase.auth.signOut();
+    setUser(null);
+  }
+
+  if (user) {
     return (
       <main style={{ padding: 40, fontFamily: "Arial" }}>
         <h1>Gestion Équipe Jason</h1>
-        <h2>Bienvenue Administrateur !</h2>
-        <p>Vous êtes connecté à votre espace administrateur.</p>
-        <button onClick={() => setLoggedIn(false)}>Déconnexion</button>
+        <h2>Bienvenue !</h2>
+        <p>Connecté avec : {user.email}</p>
+        <button onClick={logout}>Déconnexion</button>
       </main>
     );
   }
@@ -47,10 +77,11 @@ export default function Home() {
         <h1>Gestion Équipe Jason</h1>
         <p>Connexion à votre compte</p>
 
-        <label>Identifiant</label>
+        <label>Adresse e-mail</label>
         <input
-          value={username}
-          onChange={e => setUsername(e.target.value)}
+          type="email"
+          value={email}
+          onChange={e => setEmail(e.target.value)}
           required
           style={{ width: "100%", padding: 10, margin: "8px 0 18px" }}
         />
@@ -64,16 +95,17 @@ export default function Home() {
           style={{ width: "100%", padding: 10, margin: "8px 0 18px" }}
         />
 
-        <button type="submit" style={{
+        {error && <p style={{ color: "red" }}>{error}</p>}
+
+        <button type="submit" disabled={loading} style={{
           width: "100%",
           padding: 12,
           background: "#2563eb",
           color: "white",
           border: 0,
-          borderRadius: 8,
-          cursor: "pointer"
+          borderRadius: 8
         }}>
-          Se connecter
+          {loading ? "Connexion..." : "Se connecter"}
         </button>
       </form>
     </main>
