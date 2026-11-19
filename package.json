@@ -1,3 +1,4 @@
+
 {
   "name": "gestion-equipe-jason",
   "version": "1.0.0",
@@ -10,8 +11,8 @@
   "dependencies": {
     "next": "15.5.29",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
-    "@supabase/supabase-js": "^2.57.0",
+    "react-dom": "^19.0.0",
+    "@supabase/supabase-js": "^2.57.0"
   },
   "devDependencies": {
     "typescript": "^5",
