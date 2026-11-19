@@ -38,11 +38,12 @@ export async function POST(request: Request) {
 
     if (profileError) {
   console.error("SUPABASE_PROFILE_ERROR:", {
-    code: profileError.code,
-    message: profileError.message,
-    details: profileError.details,
-    hint: profileError.hint,
-  });
+  code: profileError.code,
+  message: profileError.message,
+  details: profileError.details,
+  hint: profileError.hint,
+  status: profileError.status,
+});
 
   throw new Error("Erreur recherche profil");
 }
