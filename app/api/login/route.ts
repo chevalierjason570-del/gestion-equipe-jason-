@@ -31,7 +31,7 @@ export async function POST(request: Request) {
     stage = "recherche_profil";
 
     const { data: profile, error: profileError } = await supabase
-      .from("profils")
+      .from("profiles")
       .select("id, username, display_name, role")
       .eq("username", username.trim())
       .maybeSingle();
