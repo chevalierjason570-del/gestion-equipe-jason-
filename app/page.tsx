@@ -25,22 +25,46 @@ export default function Home() {
     return () => listener.subscription.unsubscribe();
   }, []);
 
-  async function login(e: React.FormEvent) {
-    e.preventDefault();
-    setLoading(true);
-    setError("");
+ 
+async function login(e: React.FormEvent) {
+  e.preventDefault();
+  setLoading(true);
+  setError("");
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
+  try {
+    const response = await fetch("/api/login", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        username: email,
+        password,
+      }),
     });
 
-    if (error) {
-      setError("Identifiant ou mot de passe incorrect.");
+    const result = await response.json();
+
+    if (!response.ok) {
+      setError(result.error || "Identifiant ou mot de passe incorrect.");
+      return;
     }
 
+    const { error: sessionError } = await supabase.auth.setSession({
+      access_token: result.session.access_token,
+      refresh_token: result.session.refresh_token,
+    });
+
+    if (sessionError) {
+      setError("Erreur lors de la connexion.");
+    }
+  } catch {
+    setError("Impossible de contacter le serveur.");
+  } finally {
     setLoading(false);
   }
+}
+
 
   async function logout() {
     await supabase.auth.signOut();
@@ -77,9 +101,9 @@ export default function Home() {
         <h1>Gestion Équipe Jason</h1>
         <p>Connexion à votre compte</p>
 
-        <label>Adresse e-mail</label>
-        <input
-          type="email"
+        <label>Identifiant</label>
+<input
+  type="text"
           value={email}
           onChange={e => setEmail(e.target.value)}
           required
