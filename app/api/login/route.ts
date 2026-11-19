@@ -42,7 +42,6 @@ export async function POST(request: Request) {
   message: profileError.message,
   details: profileError.details,
   hint: profileError.hint,
-  status: profileError.status,
 });
 
   throw new Error("Erreur recherche profil");
