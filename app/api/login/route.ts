@@ -21,7 +21,7 @@ export async function POST(request: Request) {
     const { data: profile, error: profileError } = await supabase
       .from("profils")
       .select("id, username, display_name, role")
-      .ilike("username", username.trim())
+      .eq("username", username.trim())
       .maybeSingle();
 
     if (profileError || !profile) {
