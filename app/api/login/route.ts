@@ -35,7 +35,12 @@ export async function POST(request: Request) {
       .select("id, username, display_name, role")
       .eq("username", username.trim())
       .maybeSingle();
-
+console.log("VERIFICATION_PROFIL:", {
+  username_recherche: username.trim(),
+  projet: new URL(url).host,
+  profil_trouve: !!profile,
+  erreur: profileError?.message ?? null
+});
     if (profileError) {
   console.error("SUPABASE_PROFILE_ERROR:", {
   code: profileError.code,
