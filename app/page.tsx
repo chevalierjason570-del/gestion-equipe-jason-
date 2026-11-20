@@ -216,7 +216,58 @@ async function changeRole(item: UserProfile, role: string) {
   }
 }
 
+async function createUser(e: FormEvent) {
+  e.preventDefault();
 
+  setSaving(true);
+  setUserError("");
+  setSuccess("");
+
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+
+    if (!token) {
+      setUserError("Session expirée. Reconnecte-toi.");
+      return;
+    }
+
+    const response = await fetch("/api/admin/users", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        username: newUsername,
+        display_name: displayName,
+        password: newPassword,
+        role: newRole,
+      }),
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      setUserError(result.error || "Impossible de créer l'utilisateur.");
+      return;
+    }
+
+    setSuccess("Utilisateur créé avec succès !");
+
+    setNewUsername("");
+    setDisplayName("");
+    setNewPassword("");
+    setNewRole("standard");
+
+    await loadUsers();
+
+  } catch {
+    setUserError("Erreur lors de la création de l'utilisateur.");
+  } finally {
+    setSaving(false);
+  }
+}
 
 
   const current = menu.find(item => item.id === active);
