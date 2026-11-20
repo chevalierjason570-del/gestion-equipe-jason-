@@ -52,62 +52,20 @@ export default function Home() {
     return () => listener.subscription.unsubscribe();
   }, []);
 
+
   async function login(e: FormEvent) {
     e.preventDefault();
     setLoading(true);
     setError("");
 
     try {
-    
-  async function createUser(e: FormEvent) {
-    e.preventDefault();
-    setSaving(true);
-    setUserError("");
-    setSuccess("");
-
-    try {
-      const { data } = await supabase.auth.getSession();
-      const token = data.session?.access_token;
-
-      if (!token) {
-        setUserError("Session expirée. Reconnecte-toi.");
-        return;
-      }
-
-      const response = await fetch("/api/admin/users", {
+      const response = await fetch("/api/login", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({
-          username: newUsername,
-          display_name: displayName,
-          password: newPassword,
-          role: newRole,
-        }),
+        body: JSON.stringify({ username, password }),
       });
-
-      const result = await response.json();
-
-      if (!response.ok) {
-        setUserError(result.error || "Création impossible.");
-        return;
-      }
-
-      setSuccess("Utilisateur créé avec succès !");
-      setNewUsername("");
-      setDisplayName("");
-      setNewPassword("");
-      setNewRole("standard");
-
-      await loadUsers();
-    } catch {
-      setUserError("Erreur lors de la création.");
-    } finally {
-      setSaving(false);
-    }
-  }
 
       const result = await response.json();
 
@@ -128,6 +86,7 @@ export default function Home() {
       setLoading(false);
     }
   }
+
 
   async function logout() {
     await supabase.auth.signOut();
@@ -258,40 +217,7 @@ async function changeRole(item: UserProfile, role: string) {
 }
 
 
-      const response = await fetch("/api/admin/users", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          username: newUsername,
-          display_name: displayName,
-          password: newPassword,
-          role: newRole,
-        }),
-      });
 
-      const result = await response.json();
-
-      if (!response.ok) {
-        setUserError(result.error || "Création impossible.");
-        return;
-      }
-
-      setSuccess("Utilisateur créé avec succès !");
-      setNewUsername("");
-      setDisplayName("");
-      setNewPassword("");
-      setNewRole("standard");
-
-      await loadUsers();
-    } catch {
-      setUserError("Erreur lors de la création.");
-    } finally {
-      setSaving(false);
-    }
-  }
 
   const current = menu.find(item => item.id === active);
 
