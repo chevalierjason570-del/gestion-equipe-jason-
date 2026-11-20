@@ -13,14 +13,12 @@ const supabase = createClient(
 const BUCKET = "fichiers-equipe";
 const MAX_SIZE = 20 * 1024 * 1024;
 
-// Vérifier la connexion et récupérer le rôle
 async function verifyUser(request: Request) {
   const authorization = request.headers.get("authorization");
 
   if (!authorization?.startsWith("Bearer ")) return null;
 
   const token = authorization.slice(7);
-
   const { data, error } = await supabase.auth.getUser(token);
 
   if (error || !data.user) return null;
@@ -39,7 +37,6 @@ async function verifyUser(request: Request) {
   };
 }
 
-// Vérifier un chemin de dossier
 function validFolder(folder: string) {
   return (
     folder === "" ||
@@ -52,7 +49,7 @@ function validFolder(folder: string) {
   );
 }
 
-// Lister les fichiers et dossiers
+// LISTER LES FICHIERS
 export async function GET(request: Request) {
   const user = await verifyUser(request);
 
@@ -95,9 +92,7 @@ export async function GET(request: Request) {
           ? `${folder}/${item.name}`
           : item.name;
 
-        const isFolder = !item.id;
-
-        if (isFolder) {
+        if (!item.id) {
           return {
             name: item.name,
             path,
@@ -123,7 +118,7 @@ export async function GET(request: Request) {
   return NextResponse.json({ files: entries });
 }
 
-// Ajouter un fichier ou créer un dossier
+// AJOUTER UN FICHIER OU CRÉER UN DOSSIER
 export async function POST(request: Request) {
   const user = await verifyUser(request);
 
@@ -153,6 +148,7 @@ export async function POST(request: Request) {
       );
     }
 
+    // CRÉER UN DOSSIER
     if (action === "create_folder") {
       const name = String(formData.get("name") || "").trim();
 
@@ -182,148 +178,109 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: true });
     }
 
+    // ENVOI D'UN DOSSIER COMPLET
+    const uploadedFiles = formData.getAll("files");
+    const relativePaths = formData.getAll("paths");
+
+    if (uploadedFiles.length > 0) {
+      if (uploadedFiles.length !== relativePaths.length) {
+        return NextResponse.json(
+          { error: "Informations des fichiers invalides." },
+          { status: 400 }
+        );
+      }
+
+      const uploaded: string[] = [];
+
+      for (let i = 0; i < uploadedFiles.length; i++) {
+        const file = uploadedFiles[i];
+        const relativePath = relativePaths[i];
+
+        if (
+          !(file instanceof File) ||
+          typeof relativePath !== "string"
+        ) {
+          return NextResponse.json(
+            { error: "Fichier invalide." },
+            { status: 400 }
+          );
+        }
+
+        if (file.size === 0 || file.size > MAX_SIZE) {
+          return NextResponse.json(
+            { error: `Taille invalide : ${file.name}` },
+            { status: 400 }
+          );
+        }
+
+        const parts = relativePath.split("/");
+
+        if (
+          parts.some(part =>
+            !part ||
+            part === "." ||
+            part === ".." ||
+            !/^[a-zA-Z0-9 _.-]+$/.test(part)
+          )
+        ) {
+          return NextResponse.json(
+            { error: "Chemin de fichier invalide." },
+            { status: 400 }
+          );
+        }
+
+        const filename = parts.pop()!
+          .replace(/[^a-zA-Z0-9._-]/g, "_")
+          .slice(0, 150);
+
+        if (!filename || filename === ".folder") {
+          return NextResponse.json(
+            { error: "Nom de fichier invalide." },
+            { status: 400 }
+          );
+        }
+
+        const destination = [
+          folder,
+          parts.join("/"),
+          filename
+        ].filter(Boolean).join("/");
+
+        const { error } = await supabase.storage
+          .from(BUCKET)
+          .upload(
+            destination,
+            Buffer.from(await file.arrayBuffer()),
+            {
+              contentType: file.type || "application/octet-stream",
+              upsert: false,
+            }
+          );
+
+        if (error) {
+          return NextResponse.json(
+            {
+              error: `Impossible d'envoyer ${filename}.`,
+              uploaded,
+            },
+            { status: 400 }
+          );
+        }
+
+        uploaded.push(destination);
+      }
+
+      return NextResponse.json({
+        success: true,
+        uploaded: uploaded.length,
+      });
+    }
+
+    // ENVOI D'UN FICHIER INDIVIDUEL
     const file = formData.get("file");
 
-  
-// Téléversement d'un dossier complet ou d'un fichier
-const uploadedFiles = formData.getAll("files");
-const relativePaths = formData.getAll("paths");
-
-if (uploadedFiles.length > 0) {
-  if (uploadedFiles.length !== relativePaths.length) {
-    return NextResponse.json(
-      { error: "Informations des fichiers invalides." },
-      { status: 400 }
-    );
-  }
-
-  const uploaded: string[] = [];
-
-  for (let i = 0; i < uploadedFiles.length; i++) {
-    const file = uploadedFiles[i];
-    const relativePath = relativePaths[i];
-
-    if (!(file instanceof File) || typeof relativePath !== "string") {
+    if (!(file instanceof File) || file.size === 0) {
       return NextResponse.json(
-        { error: "Fichier invalide." },
-        { status: 400 }
-      );
-    }
-
-    if (file.size === 0 || file.size > MAX_SIZE) {
-      return NextResponse.json(
-        { error: `Taille invalide : ${file.name}` },
-        { status: 400 }
-      );
-    }
-
-    const parts = relativePath.split("/");
-
-    if (
-      parts.length === 0 ||
-      parts.some(part =>
-        !part ||
-        part === "." ||
-        part === ".." ||
-        !/^[a-zA-Z0-9 _.-]+$/.test(part)
-      )
-    ) {
-      return NextResponse.json(
-        { error: "Chemin de fichier invalide." },
-        { status: 400 }
-      );
-    }
-
-    const filename = parts.pop()!
-      .replace(/[^a-zA-Z0-9._-]/g, "_")
-      .slice(0, 150);
-
-    if (!filename || filename === ".folder") {
-      return NextResponse.json(
-        { error: "Nom de fichier invalide." },
-        { status: 400 }
-      );
-    }
-
-    const subfolder = parts.join("/");
-    const destination = [
-      folder,
-      subfolder,
-      filename
-    ].filter(Boolean).join("/");
-
-    const { error } = await supabase.storage
-      .from(BUCKET)
-      .upload(destination, Buffer.from(await file.arrayBuffer()), {
-        contentType: file.type || "application/octet-stream",
-        upsert: false,
-      });
-
-    if (error) {
-      return NextResponse.json(
-        {
-          error: `Impossible d'envoyer ${filename}. Certains fichiers ont peut-être déjà été envoyés.`,
-          uploaded
-        },
-        { status: 400 }
-      );
-    }
-
-    uploaded.push(destination);
-  }
-
-  return NextResponse.json({
-    success: true,
-    uploaded: uploaded.length
-  });
-}
-
-// Conserver également l'ancien envoi de fichier individuel
-const file = formData.get("file");
-
-if (!(file instanceof File) || file.size === 0) {
-  return NextResponse.json(
-    { error: "Aucun fichier valide sélectionné." },
-    { status: 400 }
-  );
-}
-
-if (file.size > MAX_SIZE) {
-  return NextResponse.json(
-    { error: "Le fichier dépasse la limite de 20 Mo." },
-    { status: 400 }
-  );
-}
-
-const filename = file.name
-  .replace(/[^a-zA-Z0-9._-]/g, "_")
-  .slice(0, 150);
-
-if (!filename || filename === ".folder") {
-  return NextResponse.json(
-    { error: "Nom de fichier invalide." },
-    { status: 400 }
-  );
-}
-
-const path = folder ? `${folder}/${filename}` : filename;
-
-const { error } = await supabase.storage
-  .from(BUCKET)
-  .upload(path, Buffer.from(await file.arrayBuffer()), {
-    contentType: file.type || "application/octet-stream",
-    upsert: false,
-  });
-
-if (error) {
-  return NextResponse.json(
-    { error: "Impossible d'ajouter le fichier." },
-    { status: 400 }
-  );
-}
-
-return NextResponse.json({ success: true });
-
         { error: "Aucun fichier valide sélectionné." },
         { status: 400 }
       );
@@ -366,6 +323,7 @@ return NextResponse.json({ success: true });
     }
 
     return NextResponse.json({ success: true });
+
   } catch {
     return NextResponse.json(
       { error: "Erreur lors de l'ajout." },
@@ -374,7 +332,7 @@ return NextResponse.json({ success: true });
   }
 }
 
-// Supprimer un fichier
+// SUPPRIMER UN FICHIER
 export async function DELETE(request: Request) {
   const user = await verifyUser(request);
 
@@ -399,7 +357,9 @@ export async function DELETE(request: Request) {
       typeof path !== "string" ||
       !path ||
       !validFolder(path.split("/").slice(0, -1).join("/")) ||
-      path.split("/").some(part => !part || part === "." || part === "..")
+      path.split("/").some(
+        part => !part || part === "." || part === ".."
+      )
     ) {
       return NextResponse.json(
         { error: "Chemin invalide." },
@@ -419,6 +379,7 @@ export async function DELETE(request: Request) {
     }
 
     return NextResponse.json({ success: true });
+
   } catch {
     return NextResponse.json(
       { error: "Erreur lors de la suppression." },
