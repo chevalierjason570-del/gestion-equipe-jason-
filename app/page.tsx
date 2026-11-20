@@ -29,36 +29,38 @@ const SUPABASE_PROJECT_REF = new URL(
 const TUS_ENDPOINT = `https://${SUPABASE_PROJECT_REF}.storage.supabase.co/storage/v1/upload/resumable`;
 const SUPABASE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!;
 
+// Autorise les lettres (y compris accentuées), chiffres, espaces et caractères
+// spéciaux imprimables. Seuls les caractères de contrôle et les séparateurs
+// ambigus sont refusés pour empêcher les chemins dangereux.
+function isSafeStorageSegment(segment: string) {
+  const normalized = segment.normalize("NFC");
+
+  return (
+    normalized.length > 0 &&
+    normalized.trim().length > 0 &&
+    normalized !== "." &&
+    normalized !== ".." &&
+    normalized !== ".folder" &&
+    !/[\u0000-\u001F\u007F-\u009F/\\]/u.test(normalized)
+  );
+}
+
 function buildSafeStoragePath(folder: string, relativePath: string) {
   const folderParts = folder ? folder.split("/") : [];
   const fileParts = relativePath.split("/");
-  const filenamePart = fileParts.pop();
-  const directoryParts = [...folderParts, ...fileParts];
+  const allParts = [...folderParts, ...fileParts].map(part => part.normalize("NFC"));
 
   if (
-    !filenamePart ||
-    directoryParts.some(part =>
-      !part ||
-      part === "." ||
-      part === ".." ||
-      !/^[a-zA-Z0-9 _-]+$/.test(part)
-    ) ||
-    filenamePart === "." ||
-    filenamePart === ".." ||
-    !/^[a-zA-Z0-9 _.-]+$/.test(filenamePart)
+    allParts.length === 0 ||
+    allParts.some(part => !isSafeStorageSegment(part))
   ) {
-    throw new Error("Le chemin du fichier contient des caractères non autorisés.");
+    throw new Error(
+      "Nom ou chemin invalide. Les espaces, chiffres, accents et caractères spéciaux sont autorisés."
+    );
   }
 
-  const filename = filenamePart
-    .replace(/[^a-zA-Z0-9._-]/g, "_")
-    .slice(0, 150);
-
-  if (!filename || filename === ".folder") {
-    throw new Error("Nom de fichier invalide.");
-  }
-
-  return [...directoryParts, filename].join("/");
+  // On conserve le nom d'origine : aucun remplacement des espaces ou symboles.
+  return allParts.join("/");
 }
 
 function uploadWithTus(
