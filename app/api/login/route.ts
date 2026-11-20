@@ -72,6 +72,7 @@ export async function POST(request: Request) {
     });
 
     if (error || !data.session) {
+    console.log("LOGIN_401_STAGE: verification_mot_de_passe"); 
       return NextResponse.json(
         { error: "Identifiant ou mot de passe incorrect." },
         { status: 401 }
