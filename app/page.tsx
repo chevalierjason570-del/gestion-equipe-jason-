@@ -522,14 +522,15 @@ async function uploadFile() {
   }
 }
 
-// Supprimer un fichier
+// Supprimer un fichier ou un dossier complet
 async function deleteFile(item: FileEntry) {
-  if (item.type !== "file") return;
+  const message = item.type === "folder"
+    ? `Supprimer le dossier "${item.name}" et TOUS les fichiers qu'il contient ? Cette action est définitive.`
+    : `Supprimer le fichier "${item.name}" ?`;
 
-  if (!window.confirm(`Supprimer le fichier "${item.name}" ?`)) {
-    return;
-  }
+  if (!window.confirm(message)) return;
 
+  setFileActionLoading(true);
   setFilesError("");
   setFilesSuccess("");
 
@@ -538,7 +539,7 @@ async function deleteFile(item: FileEntry) {
     const token = data.session?.access_token;
 
     if (!token) {
-      setFilesError("Session expirée.");
+      setFilesError("Session expirée. Reconnecte-toi.");
       return;
     }
 
@@ -548,20 +549,103 @@ async function deleteFile(item: FileEntry) {
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({ path: item.path }),
+      body: JSON.stringify({ path: item.path, type: item.type }),
     });
 
     const result = await response.json();
-
     if (!response.ok) {
       setFilesError(result.error || "Suppression impossible.");
       return;
     }
 
-    setFilesSuccess("Fichier supprimé avec succès !");
+    setFilesSuccess(
+      item.type === "folder"
+        ? `Dossier supprimé (${result.deleted || 0} élément(s)).`
+        : "Fichier supprimé avec succès !"
+    );
     await loadFiles();
   } catch {
     setFilesError("Erreur lors de la suppression.");
+  } finally {
+    setFileActionLoading(false);
+  }
+}
+
+// Renommer un fichier ou un dossier
+async function renameEntry(item: FileEntry) {
+  const name = window.prompt("Nouveau nom :", item.name);
+  if (name === null || !name.trim() || name.trim() === item.name) return;
+
+  await updateEntry(item, {
+    action: "rename",
+    name: name.trim(),
+  });
+}
+
+// Déplacer un fichier ou un dossier vers un autre dossier existant.
+// Laisser le champ vide pour déplacer à la racine du stockage.
+async function moveEntry(item: FileEntry) {
+  const defaultDestination = currentFolder === item.path
+    ? ""
+    : currentFolder;
+  const destinationFolder = window.prompt(
+    "Chemin du dossier de destination (vide = accueil). Exemple : Documents/Equipe",
+    defaultDestination
+  );
+  if (destinationFolder === null) return;
+
+  await updateEntry(item, {
+    action: "move",
+    destinationFolder: destinationFolder.trim(),
+  });
+}
+
+async function updateEntry(
+  item: FileEntry,
+  changes: { action: "rename"; name: string } | { action: "move"; destinationFolder: string }
+) {
+  setFileActionLoading(true);
+  setFilesError("");
+  setFilesSuccess("");
+
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+
+    if (!token) {
+      setFilesError("Session expirée. Reconnecte-toi.");
+      return;
+    }
+
+    const response = await fetch("/api/admin/files", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        path: item.path,
+        type: item.type,
+        ...changes,
+      }),
+    });
+
+    const result = await response.json();
+    if (!response.ok) {
+      setFilesError(result.error || "Opération impossible.");
+      return;
+    }
+
+    setFilesSuccess(
+      changes.action === "rename"
+        ? "Renommage effectué avec succès !"
+        : "Déplacement effectué avec succès !"
+    );
+    await loadFiles();
+  } catch {
+    setFilesError("Erreur lors de l'organisation du fichier ou dossier.");
+  } finally {
+    setFileActionLoading(false);
   }
 }
 
@@ -1282,56 +1366,94 @@ async function uploadFolder() {
                     borderTop: "1px solid #e2e8f0",
                     whiteSpace: "nowrap"
                   }}>
-                    {item.type === "folder" ? (
+                    {item.type === "folder" && (
                       <button
                         onClick={() => setCurrentFolder(item.path)}
+                        disabled={fileActionLoading}
                         style={{
                           padding: 8,
                           background: "#2563eb",
                           color: "white",
                           border: 0,
                           borderRadius: 6,
-                          cursor: "pointer"
+                          cursor: "pointer",
+                          marginRight: 6,
+                          marginBottom: 4,
                         }}
                       >
                         Ouvrir
                       </button>
-                    ) : (
-                      <>
-                        {item.downloadUrl && (
-                          <a
-                            href={item.downloadUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            style={{
-                              display: "inline-block",
-                              padding: 8,
-                              background: "#15803d",
-                              color: "white",
-                              borderRadius: 6,
-                              textDecoration: "none",
-                              marginRight: 8
-                            }}
-                          >
-                            Télécharger
-                          </a>
-                        )}
-
-                        <button
-                          onClick={() => deleteFile(item)}
-                          style={{
-                            padding: 8,
-                            background: "#dc2626",
-                            color: "white",
-                            border: 0,
-                            borderRadius: 6,
-                            cursor: "pointer"
-                          }}
-                        >
-                          Supprimer
-                        </button>
-                      </>
                     )}
+
+                    {item.type === "file" && item.downloadUrl && (
+                      <a
+                        href={item.downloadUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          display: "inline-block",
+                          padding: 8,
+                          background: "#15803d",
+                          color: "white",
+                          borderRadius: 6,
+                          textDecoration: "none",
+                          marginRight: 6,
+                          marginBottom: 4,
+                        }}
+                      >
+                        Télécharger
+                      </a>
+                    )}
+
+                    <button
+                      onClick={() => renameEntry(item)}
+                      disabled={fileActionLoading}
+                      style={{
+                        padding: 8,
+                        background: "#d97706",
+                        color: "white",
+                        border: 0,
+                        borderRadius: 6,
+                        cursor: "pointer",
+                        marginRight: 6,
+                        marginBottom: 4,
+                      }}
+                    >
+                      Renommer
+                    </button>
+
+                    <button
+                      onClick={() => moveEntry(item)}
+                      disabled={fileActionLoading}
+                      style={{
+                        padding: 8,
+                        background: "#7c3aed",
+                        color: "white",
+                        border: 0,
+                        borderRadius: 6,
+                        cursor: "pointer",
+                        marginRight: 6,
+                        marginBottom: 4,
+                      }}
+                    >
+                      Déplacer
+                    </button>
+
+                    <button
+                      onClick={() => deleteFile(item)}
+                      disabled={fileActionLoading}
+                      style={{
+                        padding: 8,
+                        background: "#dc2626",
+                        color: "white",
+                        border: 0,
+                        borderRadius: 6,
+                        cursor: "pointer",
+                        marginBottom: 4,
+                      }}
+                    >
+                      Supprimer
+                    </button>
                   </td>
                 </tr>
               ))}
