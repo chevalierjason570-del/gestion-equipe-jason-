@@ -47,7 +47,7 @@ type FileEntry = {
   created_at?: string;
   downloadUrl?: string | null;
 };
-
+const [selectedFolderFiles, setSelectedFolderFiles] = useState<File[]>([]);
 const [files, setFiles] = useState<FileEntry[]>([]);
 const [currentFolder, setCurrentFolder] = useState("");
 const [loadingFiles, setLoadingFiles] = useState(false);
