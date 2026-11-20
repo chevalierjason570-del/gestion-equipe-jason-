@@ -38,7 +38,24 @@ export default function Home() {
   const [displayName, setDisplayName] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [newRole, setNewRole] = useState("standard");
+// Gestion des fichiers partagés
+type FileEntry = {
+  name: string;
+  path: string;
+  type: "folder" | "file";
+  size?: number;
+  created_at?: string;
+  downloadUrl?: string | null;
+};
 
+const [files, setFiles] = useState<FileEntry[]>([]);
+const [currentFolder, setCurrentFolder] = useState("");
+const [loadingFiles, setLoadingFiles] = useState(false);
+const [filesError, setFilesError] = useState("");
+const [filesSuccess, setFilesSuccess] = useState("");
+const [newFolderName, setNewFolderName] = useState("");
+const [selectedFile, setSelectedFile] = useState<File | null>(null);
+const [fileActionLoading, setFileActionLoading] = useState(false);
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setUser(data.session?.user ?? null);
