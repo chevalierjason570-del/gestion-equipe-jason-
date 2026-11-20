@@ -9,6 +9,7 @@ const key = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
 const supabase = createClient(url, key);
 
+// Vérification administrateur
 async function verifyAdmin(request: Request) {
   const authorization = request.headers.get("authorization");
 
@@ -32,6 +33,20 @@ async function verifyAdmin(request: Request) {
   if (error || profile?.role !== "admin") return null;
 
   return authData.user;
+}
+
+// Compter les administrateurs
+async function countAdmins() {
+  const { count, error } = await supabase
+    .from("profiles")
+    .select("id", { count: "exact", head: true })
+    .eq("role", "admin");
+
+  if (error) {
+    throw new Error("Impossible de vérifier les administrateurs.");
+  }
+
+  return count ?? 0;
 }
 
 // Voir tous les utilisateurs
@@ -77,9 +92,16 @@ export async function POST(request: Request) {
 
     const cleanUsername = String(username || "").trim();
 
-    if (!cleanUsername || !password || password.length < 8) {
+    if (
+      !cleanUsername ||
+      typeof password !== "string" ||
+      password.length < 8
+    ) {
       return NextResponse.json(
-        { error: "Identifiant obligatoire et mot de passe de 8 caractères minimum." },
+        {
+          error:
+            "Identifiant obligatoire et mot de passe de 8 caractères minimum.",
+        },
         { status: 400 }
       );
     }
@@ -104,7 +126,6 @@ export async function POST(request: Request) {
       );
     }
 
-    // Adresse technique invisible pour l'utilisateur
     const internalEmail =
       `account-${crypto.randomUUID()}@example.com`;
 
@@ -117,7 +138,11 @@ export async function POST(request: Request) {
 
     if (createError || !newUser.user) {
       return NextResponse.json(
-        { error: createError?.message || "Création du compte impossible." },
+        {
+          error:
+            createError?.message ||
+            "Création du compte impossible.",
+        },
         { status: 400 }
       );
     }
@@ -127,7 +152,9 @@ export async function POST(request: Request) {
       .insert({
         id: newUser.user.id,
         username: cleanUsername,
-        display_name: String(display_name || cleanUsername).trim(),
+        display_name: String(
+          display_name || cleanUsername
+        ).trim(),
         role,
       });
 
@@ -135,7 +162,11 @@ export async function POST(request: Request) {
       await supabase.auth.admin.deleteUser(newUser.user.id);
 
       return NextResponse.json(
-        { error: "Impossible de créer le profil : " + profileError.message },
+        {
+          error:
+            "Impossible de créer le profil : " +
+            profileError.message,
+        },
         { status: 500 }
       );
     }
@@ -144,10 +175,164 @@ export async function POST(request: Request) {
       success: true,
       message: "Utilisateur créé avec succès.",
     });
-
   } catch {
     return NextResponse.json(
       { error: "Erreur lors de la création du compte." },
+      { status: 500 }
+    );
+  }
+}
+
+// Modifier le rôle d'un utilisateur
+export async function PATCH(request: Request) {
+  const admin = await verifyAdmin(request);
+
+  if (!admin) {
+    return NextResponse.json(
+      { error: "Accès administrateur refusé." },
+      { status: 403 }
+    );
+  }
+
+  try {
+    const { id, role } = await request.json();
+
+    if (!id || !["admin", "standard"].includes(role)) {
+      return NextResponse.json(
+        { error: "Informations invalides." },
+        { status: 400 }
+      );
+    }
+
+    const { data: target, error: targetError } = await supabase
+      .from("profiles")
+      .select("id, role")
+      .eq("id", id)
+      .maybeSingle();
+
+    if (targetError || !target) {
+      return NextResponse.json(
+        { error: "Utilisateur introuvable." },
+        { status: 404 }
+      );
+    }
+
+    // Empêcher la rétrogradation du dernier administrateur
+    if (target.role === "admin" && role !== "admin") {
+      const totalAdmins = await countAdmins();
+
+      if (totalAdmins <= 1) {
+        return NextResponse.json(
+          {
+            error:
+              "Impossible : vous devez conserver au moins un administrateur.",
+          },
+          { status: 403 }
+        );
+      }
+    }
+
+    const { error } = await supabase
+      .from("profiles")
+      .update({ role })
+      .eq("id", id);
+
+    if (error) {
+      return NextResponse.json(
+        { error: "Impossible de modifier le rôle." },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({
+      success: true,
+      message: "Rôle modifié avec succès.",
+    });
+  } catch {
+    return NextResponse.json(
+      { error: "Erreur lors de la modification du rôle." },
+      { status: 500 }
+    );
+  }
+}
+
+// Supprimer un utilisateur
+export async function DELETE(request: Request) {
+  const admin = await verifyAdmin(request);
+
+  if (!admin) {
+    return NextResponse.json(
+      { error: "Accès administrateur refusé." },
+      { status: 403 }
+    );
+  }
+
+  try {
+    const { id } = await request.json();
+
+    if (!id) {
+      return NextResponse.json(
+        { error: "Identifiant utilisateur manquant." },
+        { status: 400 }
+      );
+    }
+
+    // Empêcher l'administrateur de supprimer son propre compte
+    if (id === admin.id) {
+      return NextResponse.json(
+        {
+          error:
+            "Vous ne pouvez pas supprimer votre propre compte administrateur.",
+        },
+        { status: 403 }
+      );
+    }
+
+    const { data: target, error: targetError } = await supabase
+      .from("profiles")
+      .select("id, role")
+      .eq("id", id)
+      .maybeSingle();
+
+    if (targetError || !target) {
+      return NextResponse.json(
+        { error: "Utilisateur introuvable." },
+        { status: 404 }
+      );
+    }
+
+    // Protéger le dernier administrateur
+    if (target.role === "admin") {
+      const totalAdmins = await countAdmins();
+
+      if (totalAdmins <= 1) {
+        return NextResponse.json(
+          {
+            error:
+              "Impossible de supprimer le dernier administrateur.",
+          },
+          { status: 403 }
+        );
+      }
+    }
+
+    const { error: deleteError } =
+      await supabase.auth.admin.deleteUser(id);
+
+    if (deleteError) {
+      return NextResponse.json(
+        { error: "Impossible de supprimer cet utilisateur." },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({
+      success: true,
+      message: "Utilisateur supprimé avec succès.",
+    });
+  } catch {
+    return NextResponse.json(
+      { error: "Erreur lors de la suppression du compte." },
       { status: 500 }
     );
   }
