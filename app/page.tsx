@@ -29,45 +29,55 @@ const SUPABASE_PROJECT_REF = new URL(
 const TUS_ENDPOINT = `https://${SUPABASE_PROJECT_REF}.storage.supabase.co/storage/v1/upload/resumable`;
 const SUPABASE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!;
 
-// Autorise les lettres (y compris accentuées), chiffres, espaces et caractères
-// spéciaux imprimables. Seuls les caractères de contrôle et les séparateurs
-// ambigus sont refusés pour empêcher les chemins dangereux.
-function isSafeStorageSegment(segment: string) {
-  const normalized = segment.normalize("NFC");
+// Supabase Storage n'accepte qu'un jeu précis de caractères ASCII dans les clés.
+// On retire les accents ("lycée" devient "lycee"), on garde les espaces et la
+// ponctuation prise en charge, et on remplace les autres symboles par "_".
+function sanitizeStorageSegment(segment: string) {
+  const transliterated = segment
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[œŒæÆßøØłŁ]/g, character => {
+      const replacements: Record<string, string> = {
+        œ: "oe", Œ: "OE", æ: "ae", Æ: "AE", ß: "ss",
+        ø: "o", Ø: "O", ł: "l", Ł: "L",
+      };
+      return replacements[character] || "_";
+    });
 
-  return (
-    normalized.length > 0 &&
-    normalized.trim().length > 0 &&
-    normalized !== "." &&
-    normalized !== ".." &&
-    normalized !== ".folder" &&
-    !/[\u0000-\u001F\u007F-\u009F/\\]/u.test(normalized)
-  );
+  const safe = transliterated
+    .replace(/[^A-Za-z0-9 _.'!,*&$@=;:+?(),-]/g, "_")
+    .trim();
+
+  if (!safe || safe === "." || safe === ".." || safe === ".folder") {
+    throw new Error(
+      "Nom de fichier ou de dossier invalide après conversion pour Supabase Storage."
+    );
+  }
+
+  return safe;
 }
 
 function buildSafeStoragePath(folder: string, relativePath: string) {
   const folderParts = folder ? folder.split("/") : [];
   const fileParts = relativePath.split("/");
-  const allParts = [...folderParts, ...fileParts].map(part => part.normalize("NFC"));
 
-  if (
-    allParts.length === 0 ||
-    allParts.some(part => !isSafeStorageSegment(part))
-  ) {
-    throw new Error(
-      "Nom ou chemin invalide. Les espaces, chiffres, accents et caractères spéciaux sont autorisés."
-    );
+  if (fileParts.length === 0 || fileParts.some(part => !part.trim())) {
+    throw new Error("Le chemin du fichier est vide ou invalide.");
   }
 
-  // On conserve le nom d'origine : aucun remplacement des espaces ou symboles.
-  return allParts.join("/");
+  // Chaque segment est converti séparément : les slashs restent des séparateurs
+  // de dossiers, tandis que les espaces et signes autorisés restent inchangés.
+  return [...folderParts, ...fileParts]
+    .map(part => sanitizeStorageSegment(part))
+    .join("/");
 }
 
 function uploadWithTus(
   file: File,
   objectName: string,
   accessToken: string,
-  onProgress: (bytesUploaded: number) => void
+  onProgress: (bytesUploaded: number) => void,
+  upsert = false
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const upload = new tus.Upload(file, {
@@ -76,7 +86,7 @@ function uploadWithTus(
       headers: {
         authorization: `Bearer ${accessToken}`,
         apikey: SUPABASE_PUBLISHABLE_KEY,
-        "x-upsert": "false",
+        "x-upsert": upsert ? "true" : "false",
       },
       uploadDataDuringCreation: true,
       removeFingerprintOnSuccess: true,
@@ -561,6 +571,12 @@ async function uploadFolder() {
     return;
   }
 
+  if (!window.confirm(
+    "Si certains fichiers existent déjà au même emplacement, ils seront remplacés. Continuer ?"
+  )) {
+    return;
+  }
+
   const tooLargeFile = selectedFolderFiles.find(
     file => file.size === 0 || file.size > MAX_UPLOAD_BYTES
   );
@@ -598,7 +614,7 @@ async function uploadFolder() {
           ? Math.round(((completedBytes + bytesUploaded) / totalBytes) * 100)
           : 100;
         setUploadProgress(Math.min(100, percentage));
-      });
+      }, true);
 
       completedBytes += file.size;
       uploadedCount += 1;
