@@ -283,10 +283,10 @@ const file = formData.get("file");
 
 if (!(file instanceof File) || file.size === 0) {
   return NextResponse.json(
-    { error: "Aucun fichier valide sélectionné." },
-    { status: 400 }
-  );
-}
+   return NextResponse.json(
+  { error: "Aucun fichier valide sélectionné." },
+  { status: 400 }
+);
 
 if (file.size > MAX_SIZE) {
   return NextResponse.json(
