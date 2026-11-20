@@ -1,6 +1,8 @@
 
 import { NextResponse } from "next/server";
 import { Buffer } from "node:buffer";
+import { PassThrough, Readable } from "node:stream";
+import archiver from "archiver";
 import { createClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
@@ -12,12 +14,13 @@ const supabase = createClient(
 
 const BUCKET = "fichiers-equipe";
 
-async function verifyUser(request: Request) {
+async function verifyUser(request: Request, submittedToken?: string) {
   const authorization = request.headers.get("authorization");
+  const token = authorization?.startsWith("Bearer ")
+    ? authorization.slice(7)
+    : submittedToken;
 
-  if (!authorization?.startsWith("Bearer ")) return null;
-
-  const token = authorization.slice(7);
+  if (!token) return null;
   const { data, error } = await supabase.auth.getUser(token);
 
   if (error || !data.user) return null;
@@ -135,6 +138,91 @@ async function collectStorageObjects(folderPath: string): Promise<string[]> {
   return objects;
 }
 
+// Fabrique un ZIP en flux continu : les fichiers ne sont pas chargés tous ensemble
+// en mémoire. Le téléchargement est disponible à tout membre authentifié.
+async function createFolderZipResponse(folderPath: string): Promise<Response> {
+  const objectPaths = await collectStorageObjects(folderPath);
+  const rootName = folderPath.split("/").filter(Boolean).pop() || "fichiers";
+  const archive = archiver("zip", { zlib: { level: 0 } });
+  const output = new PassThrough();
+
+  archive.on("warning", error => output.destroy(error));
+  archive.on("error", error => output.destroy(error));
+  archive.pipe(output);
+
+  void (async () => {
+    try {
+      archive.append(Buffer.alloc(0), { name: `${rootName}/` });
+
+      // Recréer aussi les sous-dossiers vides représentés par le marqueur .folder.
+      const emptyFolderNames = new Set<string>();
+      for (const objectPath of objectPaths) {
+        const relativePath = objectPath.slice(folderPath.length).replace(/^\/+/, "");
+        if (relativePath === ".folder" || relativePath.endsWith("/.folder")) {
+          const relativeFolder = relativePath === ".folder"
+            ? ""
+            : relativePath.slice(0, -"/.folder".length);
+          const zipFolderName = relativeFolder
+            ? `${rootName}/${relativeFolder}/`
+            : `${rootName}/`;
+          emptyFolderNames.add(zipFolderName);
+        }
+      }
+
+      for (const folderName of emptyFolderNames) {
+        if (folderName !== `${rootName}/`) {
+          archive.append(Buffer.alloc(0), { name: folderName });
+        }
+      }
+
+      for (const objectPath of objectPaths) {
+        const relativePath = objectPath.slice(folderPath.length).replace(/^\/+/, "");
+        if (!relativePath || relativePath === ".folder" || relativePath.endsWith("/.folder")) {
+          continue;
+        }
+
+        const { data: signed, error: signedError } = await supabase.storage
+          .from(BUCKET)
+          .createSignedUrl(objectPath, 120);
+
+        if (signedError || !signed?.signedUrl) {
+          throw new Error(`Impossible de préparer le téléchargement de ${relativePath}.`);
+        }
+
+        const fileResponse = await fetch(signed.signedUrl);
+        if (!fileResponse.ok || !fileResponse.body) {
+          throw new Error(`Impossible de lire le fichier ${relativePath} (${fileResponse.status}).`);
+        }
+
+        const source = Readable.fromWeb(fileResponse.body as any);
+        const consumed = new Promise<void>((resolve, reject) => {
+          source.once("end", resolve);
+          source.once("error", reject);
+        });
+
+        archive.append(source, { name: `${rootName}/${relativePath}` });
+        await consumed;
+      }
+
+      archive.finalize();
+    } catch (error) {
+      archive.abort();
+      output.destroy(error instanceof Error ? error : new Error("Erreur pendant la création du ZIP."));
+    }
+  })();
+
+  const asciiName = `${rootName.replace(/[^A-Za-z0-9_-]/g, "_") || "fichiers"}.zip`;
+  const utf8Name = encodeURIComponent(`${rootName}.zip`);
+
+  return new Response(Readable.toWeb(output) as ReadableStream, {
+    headers: {
+      "Content-Type": "application/zip",
+      "Content-Disposition": `attachment; filename="${asciiName}"; filename*=UTF-8''${utf8Name}`,
+      "Cache-Control": "no-store",
+    },
+  });
+}
+
 async function moveStorageEntry(sourcePath: string, targetPath: string, type: "file" | "folder") {
   if (sourcePath === targetPath) return { moved: 0 };
 
@@ -222,6 +310,28 @@ export async function GET(request: Request) {
   }
 
   const { searchParams } = new URL(request.url);
+
+  // Téléchargement d'un dossier complet en une archive ZIP.
+  if (searchParams.has("downloadFolder")) {
+    const folderToDownload = searchParams.get("downloadFolder") || "";
+
+    if (!folderToDownload || !validFolder(folderToDownload)) {
+      return NextResponse.json(
+        { error: "Dossier à télécharger invalide." },
+        { status: 400 }
+      );
+    }
+
+    try {
+      return await createFolderZipResponse(folderToDownload);
+    } catch (error) {
+      return NextResponse.json(
+        { error: error instanceof Error ? error.message : "Impossible de préparer le dossier." },
+        { status: 500 }
+      );
+    }
+  }
+
   const folder = searchParams.get("folder") || "";
 
   if (!validFolder(folder)) {
@@ -261,9 +371,10 @@ export async function GET(request: Request) {
           };
         }
 
-        const { data: signed } = await supabase.storage
-          .from(BUCKET)
-          .createSignedUrl(path, 3600);
+        const [{ data: preview }, { data: download }] = await Promise.all([
+          supabase.storage.from(BUCKET).createSignedUrl(path, 3600),
+          supabase.storage.from(BUCKET).createSignedUrl(path, 3600, { download: item.name }),
+        ]);
 
         return {
           name: item.name,
@@ -271,36 +382,53 @@ export async function GET(request: Request) {
           type: "file",
           size: item.metadata?.size || 0,
           created_at: item.created_at,
-          downloadUrl: signed?.signedUrl || null,
+          previewUrl: preview?.signedUrl || null,
+          downloadUrl: download?.signedUrl || null,
         };
       })
   );
 
-  return NextResponse.json({ files: entries });
+  return NextResponse.json({ files: entries, role: user.role });
 }
 
 // CRÉER UN DOSSIER. Les fichiers volumineux sont envoyés directement à Storage avec TUS.
 export async function POST(request: Request) {
-  const user = await verifyUser(request);
-
-  if (!user) {
-    return NextResponse.json(
-      { error: "Connexion obligatoire." },
-      { status: 401 }
-    );
-  }
-
-  if (user.role !== "admin") {
-    return NextResponse.json(
-      { error: "Seuls les administrateurs peuvent créer des dossiers." },
-      { status: 403 }
-    );
-  }
-
   try {
     const formData = await request.formData();
     const action = String(formData.get("action") || "");
+    const submittedToken = formData.get("accessToken");
+    const user = await verifyUser(
+      request,
+      typeof submittedToken === "string" ? submittedToken : undefined
+    );
+
+    if (!user) {
+      return NextResponse.json(
+        { error: "Connexion obligatoire." },
+        { status: 401 }
+      );
+    }
+
     const folder = String(formData.get("folder") || "");
+
+    // Cette action est accessible aux membres connectés, sans droit admin.
+    if (action === "download_folder") {
+      if (!folder || !validFolder(folder)) {
+        return NextResponse.json(
+          { error: "Dossier à télécharger invalide." },
+          { status: 400 }
+        );
+      }
+      return await createFolderZipResponse(folder);
+    }
+
+    // La création et l'organisation restent réservées aux administrateurs.
+    if (user.role !== "admin") {
+      return NextResponse.json(
+        { error: "Seuls les administrateurs peuvent créer des dossiers." },
+        { status: 403 }
+      );
+    }
 
     if (action !== "create_folder") {
       return NextResponse.json(
@@ -345,9 +473,9 @@ export async function POST(request: Request) {
     }
 
     return NextResponse.json({ success: true });
-  } catch {
+  } catch (error) {
     return NextResponse.json(
-      { error: "Erreur lors de la création du dossier." },
+      { error: error instanceof Error ? error.message : "Erreur lors du traitement du dossier." },
       { status: 500 }
     );
   }
