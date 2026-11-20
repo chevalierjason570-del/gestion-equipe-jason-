@@ -63,6 +63,32 @@ function validStoragePath(path: string) {
   return parts.length > 0 && parts.every(part => validStorageSegment(part));
 }
 
+// Normalise les noms de nouveaux dossiers pour respecter les caractères
+// acceptés par Supabase Storage : accents retirés, espaces et ponctuation
+// autorisée conservés, autres caractères remplacés par "_".
+function sanitizeStorageSegment(segment: string) {
+  const transliterated = segment
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[œŒæÆßøØłŁ]/g, character => {
+      const replacements: Record<string, string> = {
+        œ: "oe", Œ: "OE", æ: "ae", Æ: "AE", ß: "ss",
+        ø: "o", Ø: "O", ł: "l", Ł: "L",
+      };
+      return replacements[character] || "_";
+    });
+
+  const safe = transliterated
+    .replace(/[^A-Za-z0-9 _.'!,*&$@=;:+?(),-]/g, "_")
+    .trim();
+
+  if (!safe || safe === "." || safe === ".." || safe === ".folder") {
+    throw new Error("Nom de dossier invalide après conversion.");
+  }
+
+  return safe;
+}
+
 // LISTER LES FICHIERS
 export async function GET(request: Request) {
   const user = await verifyUser(request);
@@ -169,20 +195,20 @@ export async function POST(request: Request) {
       );
     }
 
-    const name = String(formData.get("name") || "").normalize("NFC").trim();
+    const requestedName = String(formData.get("name") || "").normalize("NFC").trim();
 
-    if (
-      Array.from(name).length < 1 ||
-      Array.from(name).length > 60 ||
-      !validStorageSegment(name)
-    ) {
+    if (Array.from(requestedName).length < 1 || Array.from(requestedName).length > 60) {
       return NextResponse.json(
-        { error: "Nom de dossier invalide. Les espaces, chiffres, accents et caractères spéciaux imprimables sont autorisés (60 caractères maximum)." },
+        { error: "Le nom du dossier doit contenir entre 1 et 60 caractères." },
         { status: 400 }
       );
     }
 
-    const path = folder ? `${folder}/${name}` : name;
+    const name = sanitizeStorageSegment(requestedName);
+    const safeFolder = folder
+      ? folder.split("/").map(sanitizeStorageSegment).join("/")
+      : "";
+    const path = safeFolder ? `${safeFolder}/${name}` : name;
     const { error } = await supabase.storage
       .from(BUCKET)
       .upload(`${path}/.folder`, Buffer.from(""), {
