@@ -472,6 +472,68 @@ async function deleteFile(item: FileEntry) {
   }
 }
 
+async function uploadFolder() {
+  if (selectedFolderFiles.length === 0) {
+    setFilesError("Sélectionne d'abord un dossier.");
+    return;
+  }
+
+  setFileActionLoading(true);
+  setFilesError("");
+  setFilesSuccess("");
+
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+
+    if (!token) {
+      setFilesError("Session expirée. Reconnecte-toi.");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("folder", currentFolder);
+    formData.append("action", "upload");
+
+    for (const file of selectedFolderFiles) {
+      formData.append("files", file);
+      formData.append(
+        "paths",
+        (file as File & {
+          webkitRelativePath: string
+        }).webkitRelativePath
+      );
+    }
+
+    const response = await fetch("/api/admin/files", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: formData,
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      setFilesError(result.error || "Erreur lors du téléversement.");
+      return;
+    }
+
+    setFilesSuccess(
+      `${result.uploaded} fichier(s) envoyé(s) avec succès !`
+    );
+
+    setSelectedFolderFiles([]);
+    await loadFiles();
+
+  } catch {
+    setFilesError("Erreur lors de l'envoi du dossier.");
+  } finally {
+    setFileActionLoading(false);
+  }
+}
+
   const current = menu.find(item => item.id === active);
 
   const inputStyle = {
