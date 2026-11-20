@@ -285,7 +285,192 @@ async function createUser(e: FormEvent) {
     setSaving(false);
   }
 }
+// Récupérer les fichiers et dossiers
+async function loadFiles() {
+  setLoadingFiles(true);
+  setFilesError("");
 
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+
+    if (!token) {
+      setFilesError("Session expirée. Reconnecte-toi.");
+      return;
+    }
+
+    const response = await fetch(
+      `/api/admin/files?folder=${encodeURIComponent(currentFolder)}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    );
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      setFilesError(result.error || "Impossible de charger les fichiers.");
+      return;
+    }
+
+    setFiles(result.files || []);
+  } catch {
+    setFilesError("Erreur de communication avec le serveur.");
+  } finally {
+    setLoadingFiles(false);
+  }
+}
+
+// Charger les fichiers quand on ouvre la rubrique
+useEffect(() => {
+  if (user && active === "fichiers") {
+    loadFiles();
+  }
+}, [user, active, currentFolder]);
+
+// Créer un dossier
+async function createFolder(e: FormEvent) {
+  e.preventDefault();
+
+  if (!newFolderName.trim()) return;
+
+  setFileActionLoading(true);
+  setFilesError("");
+  setFilesSuccess("");
+
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+
+    if (!token) {
+      setFilesError("Session expirée.");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("action", "create_folder");
+    formData.append("folder", currentFolder);
+    formData.append("name", newFolderName);
+
+    const response = await fetch("/api/admin/files", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: formData,
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      setFilesError(result.error || "Création impossible.");
+      return;
+    }
+
+    setNewFolderName("");
+    setFilesSuccess("Dossier créé avec succès !");
+    await loadFiles();
+  } catch {
+    setFilesError("Erreur lors de la création du dossier.");
+  } finally {
+    setFileActionLoading(false);
+  }
+}
+
+// Envoyer un fichier
+async function uploadFile() {
+  if (!selectedFile) {
+    setFilesError("Sélectionne d'abord un fichier.");
+    return;
+  }
+
+  setFileActionLoading(true);
+  setFilesError("");
+  setFilesSuccess("");
+
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+
+    if (!token) {
+      setFilesError("Session expirée.");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("action", "upload");
+    formData.append("folder", currentFolder);
+    formData.append("file", selectedFile);
+
+    const response = await fetch("/api/admin/files", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: formData,
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      setFilesError(result.error || "Envoi impossible.");
+      return;
+    }
+
+    setSelectedFile(null);
+    setFilesSuccess("Fichier ajouté avec succès !");
+    await loadFiles();
+  } catch {
+    setFilesError("Erreur lors de l'envoi du fichier.");
+  } finally {
+    setFileActionLoading(false);
+  }
+}
+
+// Supprimer un fichier
+async function deleteFile(item: FileEntry) {
+  if (item.type !== "file") return;
+
+  if (!window.confirm(`Supprimer le fichier "${item.name}" ?`)) {
+    return;
+  }
+
+  setFilesError("");
+  setFilesSuccess("");
+
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+
+    if (!token) {
+      setFilesError("Session expirée.");
+      return;
+    }
+
+    const response = await fetch("/api/admin/files", {
+      method: "DELETE",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ path: item.path }),
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      setFilesError(result.error || "Suppression impossible.");
+      return;
+    }
+
+    setFilesSuccess("Fichier supprimé avec succès !");
+    await loadFiles();
+  } catch {
+    setFilesError("Erreur lors de la suppression.");
+  }
+}
 
   const current = menu.find(item => item.id === active);
 
@@ -650,8 +835,292 @@ async function createUser(e: FormEvent) {
             </div>
           </>
         )}
+{active === "fichiers" && (
+  <>
+    <h2>📁 Gestion des fichiers partagés</h2>
 
-        {active !== "accueil" && active !== "utilisateurs" && (
+    <p style={{ color: "#64748b" }}>
+      Consulte et organise les documents de ton équipe.
+    </p>
+
+    {/* Navigation des dossiers */}
+    <div style={{
+      background: "white",
+      padding: 18,
+      borderRadius: 12,
+      marginTop: 20,
+      marginBottom: 20
+    }}>
+      <strong>📂 Emplacement : </strong>
+
+      <button
+        onClick={() => setCurrentFolder("")}
+        style={{
+          border: 0,
+          background: "transparent",
+          color: "#2563eb",
+          cursor: "pointer"
+        }}
+      >
+        Accueil
+      </button>
+
+      {currentFolder.split("/").filter(Boolean).map((part, index, parts) => {
+        const path = parts.slice(0, index + 1).join("/");
+
+        return (
+          <span key={path}>
+            {" / "}
+            <button
+              onClick={() => setCurrentFolder(path)}
+              style={{
+                border: 0,
+                background: "transparent",
+                color: "#2563eb",
+                cursor: "pointer"
+              }}
+            >
+              {part}
+            </button>
+          </span>
+        );
+      })}
+    </div>
+
+    {/* Création de dossier */}
+    <div style={{
+      background: "white",
+      padding: 22,
+      borderRadius: 12,
+      marginBottom: 20
+    }}>
+      <h3>📁 Créer un dossier</h3>
+
+      <form
+        onSubmit={createFolder}
+        style={{
+          display: "flex",
+          gap: 10,
+          flexWrap: "wrap"
+        }}
+      >
+        <input
+          value={newFolderName}
+          onChange={e => setNewFolderName(e.target.value)}
+          placeholder="Nom du nouveau dossier"
+          style={{
+            ...inputStyle,
+            flex: 1,
+            minWidth: 180
+          }}
+        />
+
+        <button
+          disabled={fileActionLoading}
+          style={{
+            padding: 12,
+            background: "#2563eb",
+            color: "white",
+            border: 0,
+            borderRadius: 8,
+            cursor: "pointer"
+          }}
+        >
+          Créer
+        </button>
+      </form>
+    </div>
+
+    {/* Ajout de fichier */}
+    <div style={{
+      background: "white",
+      padding: 22,
+      borderRadius: 12,
+      marginBottom: 20
+    }}>
+      <h3>📤 Ajouter un fichier</h3>
+
+      <input
+        type="file"
+        onChange={e =>
+          setSelectedFile(e.target.files?.[0] || null)
+        }
+        style={{
+          display: "block",
+          marginBottom: 15
+        }}
+      />
+
+      <p style={{ color: "#64748b", fontSize: 13 }}>
+        Taille maximale : 20 Mo.
+      </p>
+
+      <button
+        onClick={uploadFile}
+        disabled={fileActionLoading || !selectedFile}
+        style={{
+          padding: 12,
+          background: "#15803d",
+          color: "white",
+          border: 0,
+          borderRadius: 8,
+          cursor: "pointer"
+        }}
+      >
+        {fileActionLoading ? "Traitement..." : "Envoyer le fichier"}
+      </button>
+    </div>
+
+    {/* Messages */}
+    {filesError && (
+      <p style={{ color: "#dc2626" }}>{filesError}</p>
+    )}
+
+    {filesSuccess && (
+      <p style={{ color: "#15803d" }}>{filesSuccess}</p>
+    )}
+
+    {/* Liste des fichiers */}
+    <div style={{
+      background: "white",
+      padding: 22,
+      borderRadius: 12
+    }}>
+      <h3>📂 Contenu du dossier</h3>
+
+      {loadingFiles ? (
+        <p>Chargement...</p>
+      ) : files.length === 0 ? (
+        <p style={{ color: "#64748b" }}>
+          Ce dossier est vide.
+        </p>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{
+            width: "100%",
+            borderCollapse: "collapse",
+            textAlign: "left"
+          }}>
+            <thead>
+              <tr>
+                <th style={{ padding: 12 }}>Nom</th>
+                <th style={{ padding: 12 }}>Type</th>
+                <th style={{ padding: 12 }}>Taille</th>
+                <th style={{ padding: 12 }}>Actions</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {files.map(item => (
+                <tr key={item.path}>
+                  <td style={{
+                    padding: 12,
+                    borderTop: "1px solid #e2e8f0"
+                  }}>
+                    {item.type === "folder" ? "📁" : "📄"}{" "}
+                    {item.name}
+                  </td>
+
+                  <td style={{
+                    padding: 12,
+                    borderTop: "1px solid #e2e8f0"
+                  }}>
+                    {item.type === "folder" ? "Dossier" : "Fichier"}
+                  </td>
+
+                  <td style={{
+                    padding: 12,
+                    borderTop: "1px solid #e2e8f0"
+                  }}>
+                    {item.type === "file"
+                      ? `${(item.size || 0) / 1024 / 1024 < 1
+                          ? ((item.size || 0) / 1024).toFixed(1) + " Ko"
+                          : ((item.size || 0) / 1024 / 1024).toFixed(2) + " Mo"}`
+                      : "—"}
+                  </td>
+
+                  <td style={{
+                    padding: 12,
+                    borderTop: "1px solid #e2e8f0",
+                    whiteSpace: "nowrap"
+                  }}>
+                    {item.type === "folder" ? (
+                      <button
+                        onClick={() => setCurrentFolder(item.path)}
+                        style={{
+                          padding: 8,
+                          background: "#2563eb",
+                          color: "white",
+                          border: 0,
+                          borderRadius: 6,
+                          cursor: "pointer"
+                        }}
+                      >
+                        Ouvrir
+                      </button>
+                    ) : (
+                      <>
+                        {item.downloadUrl && (
+                          <a
+                            href={item.downloadUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{
+                              display: "inline-block",
+                              padding: 8,
+                              background: "#15803d",
+                              color: "white",
+                              borderRadius: 6,
+                              textDecoration: "none",
+                              marginRight: 8
+                            }}
+                          >
+                            Télécharger
+                          </a>
+                        )}
+
+                        <button
+                          onClick={() => deleteFile(item)}
+                          style={{
+                            padding: 8,
+                            background: "#dc2626",
+                            color: "white",
+                            border: 0,
+                            borderRadius: 6,
+                            cursor: "pointer"
+                          }}
+                        >
+                          Supprimer
+                        </button>
+                      </>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <button
+        onClick={loadFiles}
+        style={{
+          marginTop: 18,
+          padding: 10,
+          background: "#e2e8f0",
+          border: 0,
+          borderRadius: 8,
+          cursor: "pointer"
+        }}
+      >
+        ↻ Actualiser
+      </button>
+    </div>
+  </>
+)}
+        {active !== "accueil" &&
+ active !== "utilisateurs" &&
+ active !== "fichiers" && (
           <div style={{
             background: "white",
             padding: 30,
