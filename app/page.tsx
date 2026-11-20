@@ -138,8 +138,10 @@ type FileEntry = {
   type: "folder" | "file";
   size?: number;
   created_at?: string;
+  previewUrl?: string | null;
   downloadUrl?: string | null;
 };
+const [fileUserRole, setFileUserRole] = useState("");
 const [selectedFolderFiles, setSelectedFolderFiles] = useState<File[]>([]);
 const [files, setFiles] = useState<FileEntry[]>([]);
 const [currentFolder, setCurrentFolder] = useState("");
@@ -410,6 +412,7 @@ async function loadFiles() {
     }
 
     setFiles(result.files || []);
+    setFileUserRole(result.role || "standard");
   } catch {
     setFilesError("Erreur de communication avec le serveur.");
   } finally {
@@ -519,6 +522,52 @@ async function uploadFile() {
   } finally {
     setFileActionLoading(false);
     setUploadProgress(null);
+  }
+}
+
+// Télécharger un dossier entier sous forme de ZIP sans charger l'archive
+// dans la mémoire du navigateur : le navigateur reçoit directement la réponse.
+async function downloadFolder(item: FileEntry) {
+  const targetName = `download-folder-${Date.now()}`;
+  const popup = window.open("about:blank", targetName);
+  setFilesError("");
+
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+
+    if (!token) {
+      popup?.close();
+      setFilesError("Session expirée. Reconnecte-toi.");
+      return;
+    }
+
+    const form = document.createElement("form");
+    form.method = "POST";
+    form.action = "/api/admin/files";
+    form.target = popup ? targetName : "_self";
+    form.style.display = "none";
+
+    const fields: Record<string, string> = {
+      action: "download_folder",
+      folder: item.path,
+      accessToken: token,
+    };
+
+    for (const [name, value] of Object.entries(fields)) {
+      const input = document.createElement("input");
+      input.type = "hidden";
+      input.name = name;
+      input.value = value;
+      form.appendChild(input);
+    }
+
+    document.body.appendChild(form);
+    form.submit();
+    form.remove();
+  } catch {
+    popup?.close();
+    setFilesError("Impossible de télécharger ce dossier.");
   }
 }
 
@@ -1083,10 +1132,10 @@ async function uploadFolder() {
         )}
 {active === "fichiers" && (
   <>
-    <h2>📁 Gestion des fichiers partagés</h2>
+    <h2>📁 Fichiers partagés</h2>
 
     <p style={{ color: "#64748b" }}>
-      Consulte et organise les documents de ton équipe.
+      Consulte les documents de ton équipe. Les aperçus et téléchargements sont disponibles pour tous les membres connectés.
     </p>
 
     {/* Navigation des dossiers */}
@@ -1133,6 +1182,7 @@ async function uploadFolder() {
       })}
     </div>
 
+    {fileUserRole === "admin" && (<>
     {/* Création de dossier */}
     <div style={{
       background: "white",
@@ -1264,6 +1314,7 @@ async function uploadFolder() {
     {fileActionLoading ? "Téléversement..." : "📁 Envoyer le dossier"}
   </button>
 </div>
+    </>)}
 
     {/* Messages */}
     {filesError && (
@@ -1274,7 +1325,7 @@ async function uploadFolder() {
       <p style={{ color: "#15803d" }}>{filesSuccess}</p>
     )}
 
-    {uploadProgress !== null && (
+    {fileUserRole === "admin" && uploadProgress !== null && (
       <div style={{ margin: "12px 0", maxWidth: 520 }}>
         <div
           role="progressbar"
@@ -1328,7 +1379,7 @@ async function uploadFolder() {
                 <th style={{ padding: 12 }}>Nom</th>
                 <th style={{ padding: 12 }}>Type</th>
                 <th style={{ padding: 12 }}>Taille</th>
-                <th style={{ padding: 12 }}>Actions</th>
+                <th style={{ padding: 12 }}>Consulter / télécharger</th>
               </tr>
             </thead>
 
@@ -1367,29 +1418,63 @@ async function uploadFolder() {
                     whiteSpace: "nowrap"
                   }}>
                     {item.type === "folder" && (
-                      <button
-                        onClick={() => setCurrentFolder(item.path)}
-                        disabled={fileActionLoading}
+                      <>
+                        <button
+                          onClick={() => setCurrentFolder(item.path)}
+                          style={{
+                            padding: 8,
+                            background: "#2563eb",
+                            color: "white",
+                            border: 0,
+                            borderRadius: 6,
+                            cursor: "pointer",
+                            marginRight: 6,
+                            marginBottom: 4,
+                          }}
+                        >
+                          Ouvrir
+                        </button>
+                        <button
+                          onClick={() => downloadFolder(item)}
+                          style={{
+                            padding: 8,
+                            background: "#15803d",
+                            color: "white",
+                            border: 0,
+                            borderRadius: 6,
+                            cursor: "pointer",
+                            marginRight: 6,
+                            marginBottom: 4,
+                          }}
+                        >
+                          Télécharger le dossier (.zip)
+                        </button>
+                      </>
+                    )}
+
+                    {item.type === "file" && item.previewUrl && (
+                      <a
+                        href={item.previewUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
                         style={{
+                          display: "inline-block",
                           padding: 8,
                           background: "#2563eb",
                           color: "white",
-                          border: 0,
                           borderRadius: 6,
-                          cursor: "pointer",
+                          textDecoration: "none",
                           marginRight: 6,
                           marginBottom: 4,
                         }}
                       >
-                        Ouvrir
-                      </button>
+                        Aperçu
+                      </a>
                     )}
 
                     {item.type === "file" && item.downloadUrl && (
                       <a
                         href={item.downloadUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
                         style={{
                           display: "inline-block",
                           padding: 8,
@@ -1405,6 +1490,7 @@ async function uploadFolder() {
                       </a>
                     )}
 
+                    {fileUserRole === "admin" && (<>
                     <button
                       onClick={() => renameEntry(item)}
                       disabled={fileActionLoading}
@@ -1454,6 +1540,7 @@ async function uploadFolder() {
                     >
                       Supprimer
                     </button>
+                    </>)}
                   </td>
                 </tr>
               ))}
