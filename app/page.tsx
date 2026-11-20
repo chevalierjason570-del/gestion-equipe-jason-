@@ -1033,6 +1033,54 @@ async function uploadFolder() {
       </button>
     </div>
 
+{/* Téléverser un dossier complet */}
+<div style={{
+  background: "white",
+  padding: 22,
+  borderRadius: 12,
+  marginBottom: 20
+}}>
+  <h3>📁 Téléverser un dossier complet</h3>
+
+  <p style={{ color: "#64748b" }}>
+    Sélectionne un dossier depuis ton ordinateur.
+  </p>
+
+  <input
+    type="file"
+    multiple
+    {...({ webkitdirectory: "", directory: "" } as any)}
+    onChange={e =>
+      setSelectedFolderFiles(
+        Array.from(e.target.files || [])
+      )
+    }
+    style={{ marginBottom: 15 }}
+  />
+
+  <p style={{ color: "#64748b", fontSize: 13 }}>
+    {selectedFolderFiles.length > 0
+      ? `${selectedFolderFiles.length} fichier(s) sélectionné(s)`
+      : "Aucun dossier sélectionné"}
+  </p>
+
+  <button
+    type="button"
+    onClick={uploadFolder}
+    disabled={fileActionLoading || selectedFolderFiles.length === 0}
+    style={{
+      padding: 12,
+      background: "#7c3aed",
+      color: "white",
+      border: 0,
+      borderRadius: 8,
+      cursor: "pointer"
+    }}
+  >
+    {fileActionLoading ? "Téléversement..." : "📁 Envoyer le dossier"}
+  </button>
+</div>
+
     {/* Messages */}
     {filesError && (
       <p style={{ color: "#dc2626" }}>{filesError}</p>
