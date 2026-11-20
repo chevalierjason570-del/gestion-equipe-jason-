@@ -46,12 +46,14 @@ export async function POST(request: Request) {
 
   throw new Error("Erreur recherche profil");
 }
-    if (!profile) {
-      return NextResponse.json(
-        { error: "Identifiant ou mot de passe incorrect." },
-        { status: 401 }
-      );
-    }
+   if (!profile) {
+  console.log("LOGIN_401_STAGE: recherche_profil");
+
+  return NextResponse.json(
+    { error: "Identifiant ou mot de passe incorrect." },
+    { status: 401 }
+  );
+}
 
     stage = "recherche_compte";
 
