@@ -128,20 +128,90 @@ export default function Home() {
     }
   }, [user, active]);
 
-  async function createUser(e: FormEvent) {
-    e.preventDefault();
-    setSaving(true);
-    setUserError("");
-    setSuccess("");
+ 
+async function deleteUser(item: UserProfile) {
+  const confirmed = window.confirm(
+    `Voulez-vous vraiment supprimer le compte ${item.username} ?`
+  );
 
-    try {
-      const { data } = await supabase.auth.getSession();
-      const token = data.session?.access_token;
+  if (!confirmed) return;
 
-      if (!token) {
-        setUserError("Session expirée. Reconnecte-toi.");
-        return;
-      }
+  setUserError("");
+  setSuccess("");
+
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+
+    if (!token) {
+      setUserError("Session expirée. Reconnecte-toi.");
+      return;
+    }
+
+    const response = await fetch("/api/admin/users", {
+      method: "DELETE",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ id: item.id }),
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      setUserError(result.error || "Suppression impossible.");
+      return;
+    }
+
+    setSuccess("Utilisateur supprimé avec succès !");
+    await loadUsers();
+
+  } catch {
+    setUserError("Erreur lors de la suppression.");
+  }
+}
+
+async function changeRole(item: UserProfile, role: string) {
+  setUserError("");
+  setSuccess("");
+
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+
+    if (!token) {
+      setUserError("Session expirée. Reconnecte-toi.");
+      return;
+    }
+
+    const response = await fetch("/api/admin/users", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        id: item.id,
+        role,
+      }),
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      setUserError(result.error || "Modification impossible.");
+      return;
+    }
+
+    setSuccess("Rôle modifié avec succès !");
+    await loadUsers();
+
+  } catch {
+    setUserError("Erreur lors de la modification.");
+  }
+}
+
 
       const response = await fetch("/api/admin/users", {
         method: "POST",
@@ -459,7 +529,7 @@ export default function Home() {
                   }}>
                     <thead>
                       <tr>
-                        {["Identifiant", "Nom affiché", "Rôle"].map(title => (
+                        {["Identifiant", "Nom affiché", "Rôle", "Actions"].map(title => (
                           <th key={title} style={{
                             padding: 12,
                             borderBottom: "1px solid #e2e8f0"
@@ -476,9 +546,51 @@ export default function Home() {
                           <td style={{ padding: 12, borderBottom: "1px solid #e2e8f0" }}>
                             {item.display_name}
                           </td>
-                          <td style={{ padding: 12, borderBottom: "1px solid #e2e8f0" }}>
-                            {item.role === "admin" ? "Administrateur" : "Standard"}
-                          </td>
+                         
+<td style={{ padding: 12, borderBottom: "1px solid #e2e8f0" }}>
+  {item.role === "admin" ? "Administrateur" : "Standard"}
+</td>
+
+<td style={{
+  padding: 12,
+  borderBottom: "1px solid #e2e8f0",
+  whiteSpace: "nowrap"
+}}>
+  <button
+    onClick={() =>
+      changeRole(
+        item,
+        item.role === "admin" ? "standard" : "admin"
+      )
+    }
+    style={{
+      padding: 8,
+      background: "#2563eb",
+      color: "white",
+      border: 0,
+      borderRadius: 6,
+      cursor: "pointer",
+      marginRight: 8
+    }}
+  >
+    {item.role === "admin" ? "Passer standard" : "Passer admin"}
+  </button>
+
+  <button
+    onClick={() => deleteUser(item)}
+    style={{
+      padding: 8,
+      background: "#dc2626",
+      color: "white",
+      border: 0,
+      borderRadius: 6,
+      cursor: "pointer"
+    }}
+  >
+    Supprimer
+  </button>
+</td>
+
                         </tr>
                       ))}
                     </tbody>
