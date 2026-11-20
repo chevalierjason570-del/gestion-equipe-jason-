@@ -184,8 +184,146 @@ export async function POST(request: Request) {
 
     const file = formData.get("file");
 
-    if (!(file instanceof File) || file.size === 0) {
+  
+// Téléversement d'un dossier complet ou d'un fichier
+const uploadedFiles = formData.getAll("files");
+const relativePaths = formData.getAll("paths");
+
+if (uploadedFiles.length > 0) {
+  if (uploadedFiles.length !== relativePaths.length) {
+    return NextResponse.json(
+      { error: "Informations des fichiers invalides." },
+      { status: 400 }
+    );
+  }
+
+  const uploaded: string[] = [];
+
+  for (let i = 0; i < uploadedFiles.length; i++) {
+    const file = uploadedFiles[i];
+    const relativePath = relativePaths[i];
+
+    if (!(file instanceof File) || typeof relativePath !== "string") {
       return NextResponse.json(
+        { error: "Fichier invalide." },
+        { status: 400 }
+      );
+    }
+
+    if (file.size === 0 || file.size > MAX_SIZE) {
+      return NextResponse.json(
+        { error: `Taille invalide : ${file.name}` },
+        { status: 400 }
+      );
+    }
+
+    const parts = relativePath.split("/");
+
+    if (
+      parts.length === 0 ||
+      parts.some(part =>
+        !part ||
+        part === "." ||
+        part === ".." ||
+        !/^[a-zA-Z0-9 _.-]+$/.test(part)
+      )
+    ) {
+      return NextResponse.json(
+        { error: "Chemin de fichier invalide." },
+        { status: 400 }
+      );
+    }
+
+    const filename = parts.pop()!
+      .replace(/[^a-zA-Z0-9._-]/g, "_")
+      .slice(0, 150);
+
+    if (!filename || filename === ".folder") {
+      return NextResponse.json(
+        { error: "Nom de fichier invalide." },
+        { status: 400 }
+      );
+    }
+
+    const subfolder = parts.join("/");
+    const destination = [
+      folder,
+      subfolder,
+      filename
+    ].filter(Boolean).join("/");
+
+    const { error } = await supabase.storage
+      .from(BUCKET)
+      .upload(destination, Buffer.from(await file.arrayBuffer()), {
+        contentType: file.type || "application/octet-stream",
+        upsert: false,
+      });
+
+    if (error) {
+      return NextResponse.json(
+        {
+          error: `Impossible d'envoyer ${filename}. Certains fichiers ont peut-être déjà été envoyés.`,
+          uploaded
+        },
+        { status: 400 }
+      );
+    }
+
+    uploaded.push(destination);
+  }
+
+  return NextResponse.json({
+    success: true,
+    uploaded: uploaded.length
+  });
+}
+
+// Conserver également l'ancien envoi de fichier individuel
+const file = formData.get("file");
+
+if (!(file instanceof File) || file.size === 0) {
+  return NextResponse.json(
+    { error: "Aucun fichier valide sélectionné." },
+    { status: 400 }
+  );
+}
+
+if (file.size > MAX_SIZE) {
+  return NextResponse.json(
+    { error: "Le fichier dépasse la limite de 20 Mo." },
+    { status: 400 }
+  );
+}
+
+const filename = file.name
+  .replace(/[^a-zA-Z0-9._-]/g, "_")
+  .slice(0, 150);
+
+if (!filename || filename === ".folder") {
+  return NextResponse.json(
+    { error: "Nom de fichier invalide." },
+    { status: 400 }
+  );
+}
+
+const path = folder ? `${folder}/${filename}` : filename;
+
+const { error } = await supabase.storage
+  .from(BUCKET)
+  .upload(path, Buffer.from(await file.arrayBuffer()), {
+    contentType: file.type || "application/octet-stream",
+    upsert: false,
+  });
+
+if (error) {
+  return NextResponse.json(
+    { error: "Impossible d'ajouter le fichier." },
+    { status: 400 }
+  );
+}
+
+return NextResponse.json({ success: true });
+
         { error: "Aucun fichier valide sélectionné." },
         { status: 400 }
       );
