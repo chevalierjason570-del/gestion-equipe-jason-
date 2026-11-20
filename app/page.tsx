@@ -113,6 +113,32 @@ function uploadWithTus(
   });
 }
 
+// Supabase TUS ne gère pas correctement les fichiers de 0 octet dans tous les cas.
+// On utilise l'upload standard pour ces fichiers vides et TUS pour les autres.
+async function uploadStorageFile(
+  file: File,
+  objectName: string,
+  accessToken: string,
+  onProgress: (bytesUploaded: number) => void,
+  upsert = false
+): Promise<void> {
+  if (file.size === 0) {
+    const { error } = await supabase.storage
+      .from(FILES_BUCKET)
+      .upload(objectName, file, {
+        cacheControl: "3600",
+        contentType: file.type || "application/octet-stream",
+        upsert,
+      });
+
+    if (error) throw error;
+    onProgress(0);
+    return;
+  }
+
+  await uploadWithTus(file, objectName, accessToken, onProgress, upsert);
+}
+
 export default function Home() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -483,8 +509,8 @@ async function uploadFile() {
     return;
   }
 
-  if (selectedFile.size === 0 || selectedFile.size > MAX_UPLOAD_BYTES) {
-    setFilesError("Le fichier doit être supérieur à 0 et ne pas dépasser 10 Go.");
+  if (selectedFile.size > MAX_UPLOAD_BYTES) {
+    setFilesError("Le fichier ne doit pas dépasser 10 Go.");
     return;
   }
 
@@ -504,10 +530,11 @@ async function uploadFile() {
 
     const objectName = buildSafeStoragePath(currentFolder, selectedFile.name);
 
-    await uploadWithTus(selectedFile, objectName, token, bytesUploaded => {
-      setUploadProgress(
-        Math.min(100, Math.round((bytesUploaded / selectedFile.size) * 100))
-      );
+    await uploadStorageFile(selectedFile, objectName, token, bytesUploaded => {
+      const percentage = selectedFile.size > 0
+        ? Math.round((bytesUploaded / selectedFile.size) * 100)
+        : 100;
+      setUploadProgress(Math.min(100, percentage));
     });
 
     setSelectedFile(null);
@@ -711,10 +738,10 @@ async function uploadFolder() {
   }
 
   const tooLargeFile = selectedFolderFiles.find(
-    file => file.size === 0 || file.size > MAX_UPLOAD_BYTES
+    file => file.size > MAX_UPLOAD_BYTES
   );
   if (tooLargeFile) {
-    setFilesError(`Le fichier "${tooLargeFile.name}" est vide ou dépasse 10 Go.`);
+    setFilesError(`Le fichier "${tooLargeFile.name}" dépasse la limite de 10 Go.`);
     return;
   }
 
@@ -742,7 +769,7 @@ async function uploadFolder() {
         (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
       const objectName = buildSafeStoragePath(currentFolder, relativePath);
 
-      await uploadWithTus(file, objectName, token, bytesUploaded => {
+      await uploadStorageFile(file, objectName, token, bytesUploaded => {
         const percentage = totalBytes > 0
           ? Math.round(((completedBytes + bytesUploaded) / totalBytes) * 100)
           : 100;
