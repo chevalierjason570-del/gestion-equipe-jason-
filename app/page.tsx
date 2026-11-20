@@ -3,6 +3,7 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import { supabase } from "@/lib/supabase";
+import * as tus from "tus-js-client";
 
 const menu = [
   { id: "accueil", label: "Accueil", icon: "🏠" },
@@ -19,6 +20,86 @@ type UserProfile = {
   display_name: string;
   role: string;
 };
+
+const FILES_BUCKET = "fichiers-equipe";
+const MAX_UPLOAD_BYTES = 10_000_000_000; // 10 Go (10 GB en base décimale)
+const SUPABASE_PROJECT_REF = new URL(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!
+).hostname.split(".")[0];
+const TUS_ENDPOINT = `https://${SUPABASE_PROJECT_REF}.storage.supabase.co/storage/v1/upload/resumable`;
+const SUPABASE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!;
+
+function buildSafeStoragePath(folder: string, relativePath: string) {
+  const folderParts = folder ? folder.split("/") : [];
+  const fileParts = relativePath.split("/");
+  const filenamePart = fileParts.pop();
+  const directoryParts = [...folderParts, ...fileParts];
+
+  if (
+    !filenamePart ||
+    directoryParts.some(part =>
+      !part ||
+      part === "." ||
+      part === ".." ||
+      !/^[a-zA-Z0-9 _-]+$/.test(part)
+    ) ||
+    filenamePart === "." ||
+    filenamePart === ".." ||
+    !/^[a-zA-Z0-9 _.-]+$/.test(filenamePart)
+  ) {
+    throw new Error("Le chemin du fichier contient des caractères non autorisés.");
+  }
+
+  const filename = filenamePart
+    .replace(/[^a-zA-Z0-9._-]/g, "_")
+    .slice(0, 150);
+
+  if (!filename || filename === ".folder") {
+    throw new Error("Nom de fichier invalide.");
+  }
+
+  return [...directoryParts, filename].join("/");
+}
+
+function uploadWithTus(
+  file: File,
+  objectName: string,
+  accessToken: string,
+  onProgress: (bytesUploaded: number) => void
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const upload = new tus.Upload(file, {
+      endpoint: TUS_ENDPOINT,
+      retryDelays: [0, 3000, 5000, 10000, 20000],
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        apikey: SUPABASE_PUBLISHABLE_KEY,
+        "x-upsert": "false",
+      },
+      uploadDataDuringCreation: true,
+      removeFingerprintOnSuccess: true,
+      chunkSize: 6 * 1024 * 1024,
+      metadata: {
+        bucketName: FILES_BUCKET,
+        objectName,
+        contentType: file.type || "application/octet-stream",
+        cacheControl: "3600",
+      },
+      onError: error => reject(error),
+      onProgress: bytesUploaded => onProgress(bytesUploaded),
+      onSuccess: () => resolve(),
+    });
+
+    upload.findPreviousUploads()
+      .then(previousUploads => {
+        if (previousUploads.length > 0) {
+          upload.resumeFromPreviousUpload(previousUploads[0]);
+        }
+        upload.start();
+      })
+      .catch(reject);
+  });
+}
 
 export default function Home() {
   const [username, setUsername] = useState("");
@@ -56,6 +137,7 @@ const [filesSuccess, setFilesSuccess] = useState("");
 const [newFolderName, setNewFolderName] = useState("");
 const [selectedFile, setSelectedFile] = useState<File | null>(null);
 const [fileActionLoading, setFileActionLoading] = useState(false);
+const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setUser(data.session?.user ?? null);
@@ -379,14 +461,20 @@ async function createFolder(e: FormEvent) {
   }
 }
 
-// Envoyer un fichier
+// Envoyer un fichier volumineux directement vers Supabase avec TUS
 async function uploadFile() {
   if (!selectedFile) {
     setFilesError("Sélectionne d'abord un fichier.");
     return;
   }
 
+  if (selectedFile.size === 0 || selectedFile.size > MAX_UPLOAD_BYTES) {
+    setFilesError("Le fichier doit être supérieur à 0 et ne pas dépasser 10 Go.");
+    return;
+  }
+
   setFileActionLoading(true);
+  setUploadProgress(0);
   setFilesError("");
   setFilesSuccess("");
 
@@ -399,33 +487,26 @@ async function uploadFile() {
       return;
     }
 
-    const formData = new FormData();
-    formData.append("action", "upload");
-    formData.append("folder", currentFolder);
-    formData.append("file", selectedFile);
+    const objectName = buildSafeStoragePath(currentFolder, selectedFile.name);
 
-    const response = await fetch("/api/admin/files", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-      body: formData,
+    await uploadWithTus(selectedFile, objectName, token, bytesUploaded => {
+      setUploadProgress(
+        Math.min(100, Math.round((bytesUploaded / selectedFile.size) * 100))
+      );
     });
-
-    const result = await response.json();
-
-    if (!response.ok) {
-      setFilesError(result.error || "Envoi impossible.");
-      return;
-    }
 
     setSelectedFile(null);
     setFilesSuccess("Fichier ajouté avec succès !");
     await loadFiles();
-  } catch {
-    setFilesError("Erreur lors de l'envoi du fichier.");
+  } catch (error) {
+    setFilesError(
+      error instanceof Error
+        ? `Erreur lors de l'envoi : ${error.message}`
+        : "Erreur lors de l'envoi du fichier."
+    );
   } finally {
     setFileActionLoading(false);
+    setUploadProgress(null);
   }
 }
 
@@ -478,9 +559,22 @@ async function uploadFolder() {
     return;
   }
 
+  const tooLargeFile = selectedFolderFiles.find(
+    file => file.size === 0 || file.size > MAX_UPLOAD_BYTES
+  );
+  if (tooLargeFile) {
+    setFilesError(`Le fichier "${tooLargeFile.name}" est vide ou dépasse 10 Go.`);
+    return;
+  }
+
   setFileActionLoading(true);
+  setUploadProgress(0);
   setFilesError("");
   setFilesSuccess("");
+
+  let uploadedCount = 0;
+  const totalBytes = selectedFolderFiles.reduce((total, file) => total + file.size, 0);
+  let completedBytes = 0;
 
   try {
     const { data } = await supabase.auth.getSession();
@@ -491,46 +585,34 @@ async function uploadFolder() {
       return;
     }
 
-    const formData = new FormData();
-    formData.append("folder", currentFolder);
-    formData.append("action", "upload");
-
+    // Envoi séquentiel : chaque fichier peut reprendre après une interruption réseau.
     for (const file of selectedFolderFiles) {
-      formData.append("files", file);
-      formData.append(
-        "paths",
-        (file as File & {
-          webkitRelativePath: string
-        }).webkitRelativePath
-      );
+      const relativePath =
+        (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
+      const objectName = buildSafeStoragePath(currentFolder, relativePath);
+
+      await uploadWithTus(file, objectName, token, bytesUploaded => {
+        const percentage = totalBytes > 0
+          ? Math.round(((completedBytes + bytesUploaded) / totalBytes) * 100)
+          : 100;
+        setUploadProgress(Math.min(100, percentage));
+      });
+
+      completedBytes += file.size;
+      uploadedCount += 1;
     }
-
-    const response = await fetch("/api/admin/files", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-      body: formData,
-    });
-
-    const result = await response.json();
-
-    if (!response.ok) {
-      setFilesError(result.error || "Erreur lors du téléversement.");
-      return;
-    }
-
-    setFilesSuccess(
-      `${result.uploaded} fichier(s) envoyé(s) avec succès !`
-    );
 
     setSelectedFolderFiles([]);
+    setFilesSuccess(`${uploadedCount} fichier(s) envoyé(s) avec succès !`);
     await loadFiles();
-
-  } catch {
-    setFilesError("Erreur lors de l'envoi du dossier.");
+  } catch (error) {
+    const detail = error instanceof Error ? ` ${error.message}` : "";
+    setFilesError(
+      `Envoi interrompu après ${uploadedCount} fichier(s) envoyé(s).${detail}`
+    );
   } finally {
     setFileActionLoading(false);
+    setUploadProgress(null);
   }
 }
 
@@ -1014,7 +1096,7 @@ async function uploadFolder() {
       />
 
       <p style={{ color: "#64748b", fontSize: 13 }}>
-        Taille maximale : 20 Mo.
+        Taille maximale : 10 Go par fichier. Envoi direct et reprenable.
       </p>
 
       <button
@@ -1088,6 +1170,34 @@ async function uploadFolder() {
 
     {filesSuccess && (
       <p style={{ color: "#15803d" }}>{filesSuccess}</p>
+    )}
+
+    {uploadProgress !== null && (
+      <div style={{ margin: "12px 0", maxWidth: 520 }}>
+        <div
+          role="progressbar"
+          aria-label="Progression du téléversement"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={uploadProgress}
+          style={{
+            height: 12,
+            background: "#e2e8f0",
+            borderRadius: 999,
+            overflow: "hidden",
+          }}
+        >
+          <div style={{
+            width: `${uploadProgress}%`,
+            height: "100%",
+            background: "#2563eb",
+            transition: "width 150ms linear",
+          }} />
+        </div>
+        <p style={{ color: "#475569", fontSize: 13 }}>
+          Envoi en cours : {uploadProgress}%
+        </p>
+      </div>
     )}
 
     {/* Liste des fichiers */}
