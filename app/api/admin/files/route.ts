@@ -1,28 +1,41 @@
-
 import { NextResponse } from "next/server";
 import { Buffer } from "node:buffer";
 import { PassThrough, Readable } from "node:stream";
-import archiver from "archiver";
+import * as archiverNamespace from "archiver";
 import { createClient } from "@supabase/supabase-js";
+import {
+  AbortMultipartUploadCommand,
+  CompleteMultipartUploadCommand,
+  CopyObjectCommand,
+  CreateMultipartUploadCommand,
+  DeleteObjectCommand,
+  DeleteObjectsCommand,
+  GetObjectCommand,
+  HeadObjectCommand,
+  ListObjectsV2Command,
+  PutObjectCommand,
+  UploadPartCopyCommand,
+} from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { getB2Client, B2_BUCKET, B2_MAX_STORAGE_BYTES, validateB2Path, validateB2Segment } from "@/lib/b2";
 
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
+  process.env.SUPABASE_SERVICE_ROLE_KEY!,
+  { auth: { persistSession: false, autoRefreshToken: false } }
 );
-
-const BUCKET = "fichiers-equipe";
 
 async function verifyUser(request: Request, submittedToken?: string) {
   const authorization = request.headers.get("authorization");
   const token = authorization?.startsWith("Bearer ")
     ? authorization.slice(7)
     : submittedToken;
-
   if (!token) return null;
-  const { data, error } = await supabase.auth.getUser(token);
 
+  const { data, error } = await supabase.auth.getUser(token);
   if (error || !data.user) return null;
 
   const { data: profile, error: profileError } = await supabase
@@ -30,181 +43,325 @@ async function verifyUser(request: Request, submittedToken?: string) {
     .select("id, role")
     .eq("id", data.user.id)
     .single();
-
   if (profileError || !profile) return null;
 
-  return {
-    id: data.user.id,
-    role: profile.role,
-  };
+  return { id: data.user.id, role: String(profile.role || "standard") };
 }
 
-// Autorise les noms en Unicode, chiffres, espaces et ponctuation imprimable.
-// Refuse les caractères de contrôle, les séparateurs ambigus et les traversées.
-function validStorageSegment(segment: string) {
-  const normalized = segment.normalize("NFC");
-
-  return (
-    normalized.length > 0 &&
-    normalized.trim().length > 0 &&
-    normalized !== "." &&
-    normalized !== ".." &&
-    normalized !== ".folder" &&
-    !/[\u0000-\u001F\u007F-\u009F/\\]/u.test(normalized)
-  );
+function safeFolderPath(value: string, allowEmpty = false) {
+  return validateB2Path(value, allowEmpty);
 }
 
-function validFolder(folder: string) {
-  return (
-    folder === "" ||
-    folder.split("/").every(part => validStorageSegment(part))
-  );
-}
+async function listAllObjects(prefix: string) {
+  const s3 = getB2Client();
+  const objects: Array<{ Key: string; Size: number; LastModified?: Date; ContentType?: string }> = [];
+  let continuationToken: string | undefined;
 
-function validStoragePath(path: string) {
-  const parts = path.split("/");
-  return parts.length > 0 && parts.every(part => validStorageSegment(part));
-}
+  do {
+    const page = await s3.send(new ListObjectsV2Command({
+      Bucket: B2_BUCKET,
+      Prefix: prefix || undefined,
+      ContinuationToken: continuationToken,
+      MaxKeys: 1000,
+    }));
 
-function parentStoragePath(path: string) {
-  const index = path.lastIndexOf("/");
-  return index >= 0 ? path.slice(0, index) : "";
-}
-
-function joinStoragePath(...parts: string[]) {
-  return parts.filter(Boolean).join("/");
-}
-
-async function storageEntryExists(path: string): Promise<boolean> {
-  const parent = parentStoragePath(path);
-  const name = path.slice(parent ? parent.length + 1 : 0);
-  const { data, error } = await supabase.storage
-    .from(BUCKET)
-    .list(parent, { search: name, limit: 100 });
-
-  if (error) throw new Error(`Impossible de vérifier la destination : ${error.message}`);
-  return (data || []).some(item => item.name === name);
-}
-
-async function storageFolderExists(path: string): Promise<boolean> {
-  if (!path) return true;
-  const parts = path.split("/");
-  let current = "";
-
-  for (const part of parts) {
-    current = joinStoragePath(current, part);
-    if (!(await storageEntryExists(current))) return false;
-  }
-
-  return true;
-}
-
-// Récupère récursivement tous les objets d'un dossier, y compris les marqueurs .folder.
-async function collectStorageObjects(folderPath: string): Promise<string[]> {
-  const objects: string[] = [];
-  const pageSize = 100;
-
-  async function walk(prefix: string, depth: number): Promise<void> {
-    if (depth > 30) throw new Error("Le dossier contient trop de niveaux imbriqués.");
-
-    let offset = 0;
-    while (true) {
-      const { data, error } = await supabase.storage
-        .from(BUCKET)
-        .list(prefix, {
-          limit: pageSize,
-          offset,
-          sortBy: { column: "name", order: "asc" },
+    for (const item of page.Contents || []) {
+      if (item.Key) {
+        objects.push({
+          Key: item.Key,
+          Size: item.Size || 0,
+          LastModified: item.LastModified,
         });
-
-      if (error) throw new Error(`Impossible de lire le dossier ${prefix} : ${error.message}`);
-      const items = data || [];
-
-      for (const item of items) {
-        const objectPath = joinStoragePath(prefix, item.name);
-        if (!item.id) {
-          await walk(objectPath, depth + 1);
-        } else {
-          objects.push(objectPath);
-        }
       }
-
-      if (items.length < pageSize) break;
-      offset += pageSize;
     }
-  }
+    continuationToken = page.IsTruncated ? page.NextContinuationToken : undefined;
+  } while (continuationToken);
 
-  await walk(folderPath, 0);
   return objects;
 }
 
-// Fabrique un ZIP en flux continu : les fichiers ne sont pas chargés tous ensemble
-// en mémoire. Le téléchargement est disponible à tout membre authentifié.
+async function listFolderEntries(folder: string) {
+  const s3 = getB2Client();
+  const prefix = folder ? `${folder}/` : "";
+  const folders = new Set<string>();
+  const files: Array<{ key: string; size: number; lastModified?: Date }> = [];
+  let continuationToken: string | undefined;
+
+  do {
+    const page = await s3.send(new ListObjectsV2Command({
+      Bucket: B2_BUCKET,
+      Prefix: prefix || undefined,
+      Delimiter: "/",
+      ContinuationToken: continuationToken,
+      MaxKeys: 1000,
+    }));
+
+    for (const common of page.CommonPrefixes || []) {
+      if (!common.Prefix) continue;
+      const withoutPrefix = common.Prefix.slice(prefix.length).replace(/\/$/, "");
+      if (withoutPrefix && !withoutPrefix.includes("/")) folders.add(withoutPrefix);
+    }
+
+    for (const item of page.Contents || []) {
+      if (!item.Key) continue;
+      const relative = item.Key.slice(prefix.length);
+      if (!relative || relative === ".folder" || relative.endsWith("/.folder")) continue;
+      if (relative.includes("/")) continue;
+      files.push({
+        key: item.Key,
+        size: item.Size || 0,
+        lastModified: item.LastModified,
+      });
+    }
+
+    continuationToken = page.IsTruncated ? page.NextContinuationToken : undefined;
+  } while (continuationToken);
+
+  const s3Client = getB2Client();
+  const folderEntries = Array.from(folders).map(name => ({
+    name,
+    path: folder ? `${folder}/${name}` : name,
+    type: "folder" as const,
+  }));
+
+  const fileEntries = await Promise.all(files.map(async file => {
+    const name = file.key.slice(prefix.length);
+    const dispositionName = encodeURIComponent(name).replace(/'/g, "%27");
+    const [previewUrl, downloadUrl] = await Promise.all([
+      getSignedUrl(
+        s3Client,
+        new GetObjectCommand({
+          Bucket: B2_BUCKET,
+          Key: file.key,
+          ResponseContentDisposition: `inline; filename*=UTF-8''${dispositionName}`,
+        }),
+        { expiresIn: 3600 }
+      ),
+      getSignedUrl(
+        s3Client,
+        new GetObjectCommand({
+          Bucket: B2_BUCKET,
+          Key: file.key,
+          ResponseContentDisposition: `attachment; filename*=UTF-8''${dispositionName}`,
+        }),
+        { expiresIn: 3600 }
+      ),
+    ]);
+
+    return {
+      name,
+      path: file.key,
+      type: "file" as const,
+      size: file.size,
+      created_at: file.lastModified?.toISOString() || null,
+      previewUrl,
+      downloadUrl,
+    };
+  }));
+
+  return [...folderEntries, ...fileEntries].sort((a, b) => {
+    if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
+    return a.name.localeCompare(b.name, "fr", { sensitivity: "base" });
+  });
+}
+
+async function getTotalStorageBytes() {
+  const objects = await listAllObjects("");
+  return objects.reduce((sum, item) => sum + item.Size, 0);
+}
+
+function encodeCopySource(bucket: string, key: string) {
+  return `${bucket}/${key.split("/").map(part => encodeURIComponent(part)).join("/")}`;
+}
+
+async function entryExists(path: string, _type: "file" | "folder") {
+  const s3 = getB2Client();
+  let exactExists = false;
+  try {
+    await s3.send(new HeadObjectCommand({ Bucket: B2_BUCKET, Key: path }));
+    exactExists = true;
+  } catch (error: any) {
+    if (error?.$metadata?.httpStatusCode !== 404 && error?.name !== "NotFound") throw error;
+  }
+
+  const page = await s3.send(new ListObjectsV2Command({
+    Bucket: B2_BUCKET,
+    Prefix: `${path}/`,
+    MaxKeys: 1,
+  }));
+  return exactExists || (page.Contents || []).length > 0;
+}
+
+async function deleteKeys(keys: string[]) {
+  const s3 = getB2Client();
+  for (let i = 0; i < keys.length; i += 1000) {
+    const batch = keys.slice(i, i + 1000);
+    if (batch.length === 1) {
+      await s3.send(new DeleteObjectCommand({ Bucket: B2_BUCKET, Key: batch[0] }));
+    } else if (batch.length > 1) {
+      const result = await s3.send(new DeleteObjectsCommand({
+        Bucket: B2_BUCKET,
+        Delete: { Objects: batch.map(Key => ({ Key })), Quiet: true },
+      }));
+      if (result.Errors?.length) {
+        throw new Error(`Suppression partielle : ${result.Errors[0].Message || result.Errors[0].Key}`);
+      }
+    }
+  }
+}
+
+async function copySingleObject(source: string, target: string) {
+  const s3 = getB2Client();
+  const head = await s3.send(new HeadObjectCommand({ Bucket: B2_BUCKET, Key: source }));
+  const size = head.ContentLength || 0;
+  const copySource = encodeCopySource(B2_BUCKET, source);
+  const maxSingleCopyBytes = 5 * 1024 * 1024 * 1024;
+
+  if (size <= maxSingleCopyBytes) {
+    await s3.send(new CopyObjectCommand({
+      Bucket: B2_BUCKET,
+      Key: target,
+      CopySource: copySource,
+    }));
+    return;
+  }
+
+  // Copy multipart côté B2 pour pouvoir renommer/déplacer aussi les objets > 5 GiB.
+  const created = await s3.send(new CreateMultipartUploadCommand({
+    Bucket: B2_BUCKET,
+    Key: target,
+    ContentType: head.ContentType || "application/octet-stream",
+  }));
+  if (!created.UploadId) throw new Error(`Impossible de démarrer la copie de ${source}.`);
+
+  const uploadId = created.UploadId;
+  const partSize = 5 * 1024 * 1024 * 1024;
+  const partCount = Math.ceil(size / partSize);
+  const parts: Array<{ PartNumber: number; ETag: string }> = [];
+
+  try {
+    for (let partNumber = 1; partNumber <= partCount; partNumber++) {
+      const start = (partNumber - 1) * partSize;
+      const end = Math.min(size - 1, start + partSize - 1);
+      const copied = await s3.send(new UploadPartCopyCommand({
+        Bucket: B2_BUCKET,
+        Key: target,
+        UploadId: uploadId,
+        PartNumber: partNumber,
+        CopySource: copySource,
+        CopySourceRange: `bytes=${start}-${end}`,
+      }));
+      const etag = copied.CopyPartResult?.ETag;
+      if (!etag) throw new Error(`B2 n'a pas confirmé la partie ${partNumber} de ${source}.`);
+      parts.push({ PartNumber: partNumber, ETag: etag });
+    }
+
+    await s3.send(new CompleteMultipartUploadCommand({
+      Bucket: B2_BUCKET,
+      Key: target,
+      UploadId: uploadId,
+      MultipartUpload: { Parts: parts },
+    }));
+  } catch (error) {
+    await s3.send(new AbortMultipartUploadCommand({
+      Bucket: B2_BUCKET,
+      Key: target,
+      UploadId: uploadId,
+    })).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function copyEntry(sourcePath: string, targetPath: string, type: "file" | "folder") {
+  const sourceObjects = type === "file"
+    ? [{ Key: sourcePath }]
+    : await listAllObjects(`${sourcePath}/`);
+
+  if (sourceObjects.length === 0) {
+    throw new Error("Cet élément est vide ou n'existe plus.");
+  }
+
+  if (type === "folder" && targetPath.startsWith(`${sourcePath}/`)) {
+    throw new Error("Un dossier ne peut pas être déplacé à l'intérieur de lui-même.");
+  }
+
+  const targets = sourceObjects.map(item => ({
+    source: item.Key,
+    target: type === "file"
+      ? targetPath
+      : `${targetPath}${item.Key.slice(sourcePath.length)}`,
+  }));
+
+  for (const entry of targets) {
+    if (await entryExists(entry.target, "file")) {
+      throw new Error(`Un fichier ou dossier existe déjà à cet emplacement : ${entry.target}`);
+    }
+  }
+
+  const copied: string[] = [];
+  try {
+    for (const item of targets) {
+      await copySingleObject(item.source, item.target);
+      copied.push(item.target);
+    }
+  } catch (error) {
+    if (copied.length) await deleteKeys(copied).catch(() => undefined);
+    throw error;
+  }
+
+  await deleteKeys(targets.map(item => item.source));
+  return { moved: targets.length };
+}
+
 async function createFolderZipResponse(folderPath: string): Promise<Response> {
-  const objectPaths = await collectStorageObjects(folderPath);
+  const s3 = getB2Client();
+  const prefix = `${folderPath}/`;
+  const objects = await listAllObjects(prefix);
+  if (objects.length === 0) {
+    throw new Error("Ce dossier est vide ou n'existe plus.");
+  }
+
   const rootName = folderPath.split("/").filter(Boolean).pop() || "fichiers";
-  const archive = archiver("zip", { zlib: { level: 0 } });
+  const archiveFactory = (archiverNamespace as unknown as { default?: (format: string, options: object) => any }).default
+    || (archiverNamespace as unknown as (format: string, options: object) => any);
+  const archive = archiveFactory("zip", { zlib: { level: 0 } });
   const output = new PassThrough();
 
-  archive.on("warning", error => output.destroy(error));
-  archive.on("error", error => output.destroy(error));
+  archive.on("warning", (error: Error) => output.destroy(error));
+  archive.on("error", (error: Error) => output.destroy(error));
   archive.pipe(output);
 
   void (async () => {
     try {
-      archive.append(Buffer.alloc(0), { name: `${rootName}/` });
-
-      // Recréer aussi les sous-dossiers vides représentés par le marqueur .folder.
-      const emptyFolderNames = new Set<string>();
-      for (const objectPath of objectPaths) {
-        const relativePath = objectPath.slice(folderPath.length).replace(/^\/+/, "");
+      const explicitFolders = new Set<string>([`${rootName}/`]);
+      for (const item of objects) {
+        const relativePath = item.Key.slice(prefix.length);
         if (relativePath === ".folder" || relativePath.endsWith("/.folder")) {
-          const relativeFolder = relativePath === ".folder"
+          const folderRelative = relativePath === ".folder"
             ? ""
             : relativePath.slice(0, -"/.folder".length);
-          const zipFolderName = relativeFolder
-            ? `${rootName}/${relativeFolder}/`
-            : `${rootName}/`;
-          emptyFolderNames.add(zipFolderName);
+          explicitFolders.add(folderRelative ? `${rootName}/${folderRelative}/` : `${rootName}/`);
         }
       }
-
-      for (const folderName of emptyFolderNames) {
-        if (folderName !== `${rootName}/`) {
-          archive.append(Buffer.alloc(0), { name: folderName });
-        }
+      for (const folderName of explicitFolders) {
+        archive.append(Buffer.alloc(0), { name: folderName });
       }
 
-      for (const objectPath of objectPaths) {
-        const relativePath = objectPath.slice(folderPath.length).replace(/^\/+/, "");
-        if (!relativePath || relativePath === ".folder" || relativePath.endsWith("/.folder")) {
-          continue;
-        }
+      for (const item of objects) {
+        const relativePath = item.Key.slice(prefix.length);
+        if (!relativePath || relativePath === ".folder" || relativePath.endsWith("/.folder")) continue;
 
-        const { data: signed, error: signedError } = await supabase.storage
-          .from(BUCKET)
-          .createSignedUrl(objectPath, 120);
-
-        if (signedError || !signed?.signedUrl) {
-          throw new Error(`Impossible de préparer le téléchargement de ${relativePath}.`);
-        }
-
-        const fileResponse = await fetch(signed.signedUrl);
-        if (!fileResponse.ok || !fileResponse.body) {
-          throw new Error(`Impossible de lire le fichier ${relativePath} (${fileResponse.status}).`);
-        }
-
-        const source = Readable.fromWeb(fileResponse.body as any);
+        const response = await s3.send(new GetObjectCommand({ Bucket: B2_BUCKET, Key: item.Key }));
+        if (!response.Body) throw new Error(`Impossible de lire ${relativePath}.`);
+        const source = response.Body as unknown as Readable;
         const consumed = new Promise<void>((resolve, reject) => {
           source.once("end", resolve);
           source.once("error", reject);
         });
-
         archive.append(source, { name: `${rootName}/${relativePath}` });
         await consumed;
       }
-
-      archive.finalize();
+      await archive.finalize();
     } catch (error) {
       archive.abort();
       output.destroy(error instanceof Error ? error : new Error("Erreur pendant la création du ZIP."));
@@ -213,7 +370,6 @@ async function createFolderZipResponse(folderPath: string): Promise<Response> {
 
   const asciiName = `${rootName.replace(/[^A-Za-z0-9_-]/g, "_") || "fichiers"}.zip`;
   const utf8Name = encodeURIComponent(`${rootName}.zip`);
-
   return new Response(Readable.toWeb(output) as ReadableStream, {
     headers: {
       "Content-Type": "application/zip",
@@ -223,175 +379,43 @@ async function createFolderZipResponse(folderPath: string): Promise<Response> {
   });
 }
 
-async function moveStorageEntry(sourcePath: string, targetPath: string, type: "file" | "folder") {
-  if (sourcePath === targetPath) return { moved: 0 };
-
-  if (type === "file") {
-    const { error } = await supabase.storage.from(BUCKET).move(sourcePath, targetPath);
-    if (error) throw new Error(`Déplacement impossible : ${error.message}`);
-    return { moved: 1 };
-  }
-
-  if (targetPath.startsWith(`${sourcePath}/`)) {
-    throw new Error("Tu ne peux pas déplacer un dossier à l'intérieur de lui-même.");
-  }
-
-  const sourceObjects = await collectStorageObjects(sourcePath);
-  if (sourceObjects.length === 0) {
-    throw new Error("Ce dossier ne contient aucun objet à déplacer.");
-  }
-
-  const destinations = sourceObjects.map(sourceObject =>
-    `${targetPath}${sourceObject.slice(sourcePath.length)}`
-  );
-
-  // Vérifier toutes les destinations avant de commencer afin d'éviter les écrasements.
-  for (const destination of destinations) {
-    if (await storageEntryExists(destination)) {
-      throw new Error(`Un élément existe déjà à cet emplacement : ${destination}`);
-    }
-  }
-
-  const moved: Array<{ source: string; destination: string }> = [];
-  for (let index = 0; index < sourceObjects.length; index++) {
-    const source = sourceObjects[index];
-    const destination = destinations[index];
-    const { error } = await supabase.storage.from(BUCKET).move(source, destination);
-
-    if (error) {
-      // Tenter de remettre à leur emplacement d'origine les objets déjà déplacés.
-      for (const item of moved.reverse()) {
-        await supabase.storage.from(BUCKET).move(item.destination, item.source);
-      }
-      throw new Error(`Déplacement interrompu (${moved.length} élément(s) déplacé(s) avant l'erreur) : ${error.message}`);
-    }
-
-    moved.push({ source, destination });
-  }
-
-  return { moved: moved.length };
-}
-
-// Normalise les noms de nouveaux dossiers pour respecter les caractères
-// acceptés par Supabase Storage : accents retirés, espaces et ponctuation
-// autorisée conservés, autres caractères remplacés par "_".
-function sanitizeStorageSegment(segment: string) {
-  const transliterated = segment
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[œŒæÆßøØłŁ]/g, character => {
-      const replacements: Record<string, string> = {
-        œ: "oe", Œ: "OE", æ: "ae", Æ: "AE", ß: "ss",
-        ø: "o", Ø: "O", ł: "l", Ł: "L",
-      };
-      return replacements[character] || "_";
-    });
-
-  const safe = transliterated
-    .replace(/[^A-Za-z0-9 _.'!,*&$@=;:+?(),-]/g, "_")
-    .trim();
-
-  if (!safe || safe === "." || safe === ".." || safe === ".folder") {
-    throw new Error("Nom de dossier invalide après conversion.");
-  }
-
-  return safe;
-}
-
-// LISTER LES FICHIERS
+// LISTER LES FICHIERS, DOSSIERS ET L'UTILISATION DU QUOTA B2.
 export async function GET(request: Request) {
   const user = await verifyUser(request);
-
   if (!user) {
-    return NextResponse.json(
-      { error: "Connexion obligatoire." },
-      { status: 401 }
-    );
+    return NextResponse.json({ error: "Connexion obligatoire." }, { status: 401 });
   }
 
-  const { searchParams } = new URL(request.url);
-
-  // Téléchargement d'un dossier complet en une archive ZIP.
-  if (searchParams.has("downloadFolder")) {
-    const folderToDownload = searchParams.get("downloadFolder") || "";
-
-    if (!folderToDownload || !validFolder(folderToDownload)) {
-      return NextResponse.json(
-        { error: "Dossier à télécharger invalide." },
-        { status: 400 }
-      );
+  try {
+    const { searchParams } = new URL(request.url);
+    if (searchParams.has("downloadFolder")) {
+      const folderPath = safeFolderPath(searchParams.get("downloadFolder") || "");
+      return await createFolderZipResponse(folderPath);
     }
 
-    try {
-      return await createFolderZipResponse(folderToDownload);
-    } catch (error) {
-      return NextResponse.json(
-        { error: error instanceof Error ? error.message : "Impossible de préparer le dossier." },
-        { status: 500 }
-      );
-    }
-  }
+    const folder = safeFolderPath(searchParams.get("folder") || "", true);
+    const [files, usedBytes] = await Promise.all([
+      listFolderEntries(folder),
+      getTotalStorageBytes(),
+    ]);
 
-  const folder = searchParams.get("folder") || "";
-
-  if (!validFolder(folder)) {
-    return NextResponse.json(
-      { error: "Dossier invalide." },
-      { status: 400 }
-    );
-  }
-
-  const { data, error } = await supabase.storage
-    .from(BUCKET)
-    .list(folder, {
-      limit: 100,
-      sortBy: { column: "name", order: "asc" },
+    return NextResponse.json({
+      files,
+      role: user.role,
+      storage: {
+        usedBytes,
+        limitBytes: B2_MAX_STORAGE_BYTES,
+        remainingBytes: Math.max(0, B2_MAX_STORAGE_BYTES - usedBytes),
+      },
     });
-
-  if (error) {
-    return NextResponse.json(
-      { error: "Impossible de charger les fichiers." },
-      { status: 500 }
-    );
+  } catch (error) {
+    return NextResponse.json({
+      error: error instanceof Error ? error.message : "Impossible de charger les fichiers B2.",
+    }, { status: 500 });
   }
-
-  const entries = await Promise.all(
-    (data || [])
-      .filter(item => item.name !== ".folder")
-      .map(async item => {
-        const path = folder
-          ? `${folder}/${item.name}`
-          : item.name;
-
-        if (!item.id) {
-          return {
-            name: item.name,
-            path,
-            type: "folder",
-          };
-        }
-
-        const [{ data: preview }, { data: download }] = await Promise.all([
-          supabase.storage.from(BUCKET).createSignedUrl(path, 3600),
-          supabase.storage.from(BUCKET).createSignedUrl(path, 3600, { download: item.name }),
-        ]);
-
-        return {
-          name: item.name,
-          path,
-          type: "file",
-          size: item.metadata?.size || 0,
-          created_at: item.created_at,
-          previewUrl: preview?.signedUrl || null,
-          downloadUrl: download?.signedUrl || null,
-        };
-      })
-  );
-
-  return NextResponse.json({ files: entries, role: user.role });
 }
 
-// CRÉER UN DOSSIER. Les fichiers volumineux sont envoyés directement à Storage avec TUS.
+// CRÉER UN DOSSIER OU PRÉPARER LE TÉLÉCHARGEMENT D'UN DOSSIER ZIP.
 export async function POST(request: Request) {
   try {
     const formData = await request.formData();
@@ -401,258 +425,131 @@ export async function POST(request: Request) {
       request,
       typeof submittedToken === "string" ? submittedToken : undefined
     );
-
     if (!user) {
-      return NextResponse.json(
-        { error: "Connexion obligatoire." },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "Connexion obligatoire." }, { status: 401 });
     }
 
-    const folder = String(formData.get("folder") || "");
+    const rawFolder = String(formData.get("folder") || "");
+    const folder = safeFolderPath(rawFolder, true);
 
-    // Cette action est accessible aux membres connectés, sans droit admin.
     if (action === "download_folder") {
-      if (!folder || !validFolder(folder)) {
-        return NextResponse.json(
-          { error: "Dossier à télécharger invalide." },
-          { status: 400 }
-        );
+      if (!folder) {
+        return NextResponse.json({ error: "Dossier à télécharger invalide." }, { status: 400 });
       }
       return await createFolderZipResponse(folder);
     }
 
-    // La création et l'organisation restent réservées aux administrateurs.
     if (user.role !== "admin") {
-      return NextResponse.json(
-        { error: "Seuls les administrateurs peuvent créer des dossiers." },
-        { status: 403 }
-      );
+      return NextResponse.json({ error: "Seuls les administrateurs peuvent créer des dossiers." }, { status: 403 });
     }
 
     if (action !== "create_folder") {
-      return NextResponse.json(
-        { error: "Les fichiers doivent être envoyés avec le téléversement direct TUS." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Action inconnue." }, { status: 400 });
     }
 
-    if (!validFolder(folder)) {
-      return NextResponse.json(
-        { error: "Dossier invalide." },
-        { status: 400 }
-      );
+    const name = String(formData.get("name") || "").normalize("NFC").trim();
+    if (!name || Array.from(name).length > 60) {
+      return NextResponse.json({ error: "Le nom du dossier doit contenir entre 1 et 60 caractères." }, { status: 400 });
+    }
+    const safeName = validateB2Segment(name);
+    const path = folder ? `${folder}/${safeName}` : safeName;
+    const s3 = getB2Client();
+
+    if (await entryExists(path, "folder")) {
+      return NextResponse.json({ error: "Un fichier ou dossier porte déjà ce nom." }, { status: 409 });
     }
 
-    const requestedName = String(formData.get("name") || "").normalize("NFC").trim();
-
-    if (Array.from(requestedName).length < 1 || Array.from(requestedName).length > 60) {
-      return NextResponse.json(
-        { error: "Le nom du dossier doit contenir entre 1 et 60 caractères." },
-        { status: 400 }
-      );
-    }
-
-    const name = sanitizeStorageSegment(requestedName);
-    const safeFolder = folder
-      ? folder.split("/").map(sanitizeStorageSegment).join("/")
-      : "";
-    const path = safeFolder ? `${safeFolder}/${name}` : name;
-    const { error } = await supabase.storage
-      .from(BUCKET)
-      .upload(`${path}/.folder`, Buffer.from(""), {
-        contentType: "text/plain",
-        upsert: false,
-      });
-
-    if (error) {
-      return NextResponse.json(
-        { error: "Impossible de créer le dossier." },
-        { status: 400 }
-      );
-    }
-
+    await s3.send(new PutObjectCommand({
+      Bucket: B2_BUCKET,
+      Key: `${path}/.folder`,
+      Body: new Uint8Array(),
+      ContentType: "application/x-directory",
+    }));
     return NextResponse.json({ success: true });
   } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Erreur lors du traitement du dossier." },
-      { status: 500 }
-    );
+    return NextResponse.json({
+      error: error instanceof Error ? error.message : "Erreur lors du traitement du dossier.",
+    }, { status: 500 });
   }
 }
 
-// SUPPRIMER UN FICHIER OU UN DOSSIER (avec tout son contenu)
+// SUPPRIMER UN FICHIER OU UN DOSSIER COMPLET.
 export async function DELETE(request: Request) {
   const user = await verifyUser(request);
-
-  if (!user) {
-    return NextResponse.json(
-      { error: "Connexion obligatoire." },
-      { status: 401 }
-    );
-  }
-
+  if (!user) return NextResponse.json({ error: "Connexion obligatoire." }, { status: 401 });
   if (user.role !== "admin") {
-    return NextResponse.json(
-      { error: "Seuls les administrateurs peuvent supprimer des fichiers." },
-      { status: 403 }
-    );
+    return NextResponse.json({ error: "Seuls les administrateurs peuvent supprimer des fichiers." }, { status: 403 });
   }
 
   try {
     const body = await request.json();
-    const path = body?.path;
+    const path = safeFolderPath(String(body?.path || ""));
     const type = body?.type;
-
-    if (
-      typeof path !== "string" ||
-      !path ||
-      !validStoragePath(path) ||
-      (type !== "file" && type !== "folder")
-    ) {
-      return NextResponse.json(
-        { error: "Chemin ou type d'élément invalide." },
-        { status: 400 }
-      );
+    if (type !== "file" && type !== "folder") {
+      return NextResponse.json({ error: "Type d'élément invalide." }, { status: 400 });
     }
 
-    const objectPaths = type === "folder"
-      ? await collectStorageObjects(path)
-      : [path];
-
-    if (objectPaths.length === 0) {
-      return NextResponse.json(
-        { error: "Ce dossier est déjà vide ou n'existe plus." },
-        { status: 404 }
-      );
+    const objects = type === "folder"
+      ? await listAllObjects(`${path}/`)
+      : [{ Key: path, Size: 0 }];
+    if (objects.length === 0) {
+      return NextResponse.json({ error: "Cet élément n'existe plus." }, { status: 404 });
     }
 
-    // Storage remove accepte des lots limités ; on supprime par groupes de 100.
-    for (let index = 0; index < objectPaths.length; index += 100) {
-      const batch = objectPaths.slice(index, index + 100);
-      const { error } = await supabase.storage.from(BUCKET).remove(batch);
-      if (error) {
-        return NextResponse.json(
-          { error: `Suppression partielle après ${index} élément(s) : ${error.message}` },
-          { status: 500 }
-        );
-      }
-    }
-
-    return NextResponse.json({ success: true, deleted: objectPaths.length });
+    await deleteKeys(objects.map(item => item.Key));
+    return NextResponse.json({ success: true, deleted: objects.length });
   } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Erreur lors de la suppression." },
-      { status: 500 }
-    );
+    return NextResponse.json({
+      error: error instanceof Error ? error.message : "Erreur lors de la suppression.",
+    }, { status: 500 });
   }
 }
 
-// RENOMMER OU DÉPLACER UN FICHIER / DOSSIER
+// RENOMMER OU DÉPLACER UN FICHIER / DOSSIER.
 export async function PATCH(request: Request) {
   const user = await verifyUser(request);
-
-  if (!user) {
-    return NextResponse.json(
-      { error: "Connexion obligatoire." },
-      { status: 401 }
-    );
-  }
-
+  if (!user) return NextResponse.json({ error: "Connexion obligatoire." }, { status: 401 });
   if (user.role !== "admin") {
-    return NextResponse.json(
-      { error: "Seuls les administrateurs peuvent organiser les fichiers." },
-      { status: 403 }
-    );
+    return NextResponse.json({ error: "Seuls les administrateurs peuvent organiser les fichiers." }, { status: 403 });
   }
 
   try {
     const body = await request.json();
-    const action = body?.action;
-    const path = body?.path;
+    const path = safeFolderPath(String(body?.path || ""));
     const type = body?.type;
-
-    if (
-      typeof path !== "string" ||
-      !path ||
-      !validStoragePath(path) ||
-      (type !== "file" && type !== "folder")
-    ) {
-      return NextResponse.json(
-        { error: "Chemin ou type d'élément invalide." },
-        { status: 400 }
-      );
+    const action = body?.action;
+    if (type !== "file" && type !== "folder") {
+      return NextResponse.json({ error: "Type d'élément invalide." }, { status: 400 });
     }
 
-    let targetPath = "";
-
+    let targetPath: string;
     if (action === "rename") {
-      if (typeof body?.name !== "string") {
-        return NextResponse.json(
-          { error: "Nouveau nom manquant." },
-          { status: 400 }
-        );
-      }
-
-      const safeName = sanitizeStorageSegment(body.name.normalize("NFC").trim());
-      targetPath = joinStoragePath(parentStoragePath(path), safeName);
+      const name = String(body?.name || "").normalize("NFC").trim();
+      if (!name || name.length > 255) throw new Error("Nouveau nom invalide.");
+      const safeName = validateB2Segment(name);
+      const parent = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+      targetPath = parent ? `${parent}/${safeName}` : safeName;
     } else if (action === "move") {
-      if (typeof body?.destinationFolder !== "string") {
-        return NextResponse.json(
-          { error: "Dossier de destination manquant." },
-          { status: 400 }
-        );
-      }
-
-      const rawDestination = body.destinationFolder.normalize("NFC").trim();
-      const destinationParts = rawDestination ? rawDestination.split("/") : [];
-      if (destinationParts.some((part: string) => !part.trim() || part === "." || part === "..")) {
-        return NextResponse.json(
-          { error: "Chemin du dossier de destination invalide." },
-          { status: 400 }
-        );
-      }
-
-      const destinationFolder = destinationParts.map((part: string) => sanitizeStorageSegment(part)).join("/");
-      if (!(await storageFolderExists(destinationFolder))) {
-        return NextResponse.json(
-          { error: "Le dossier de destination n'existe pas." },
-          { status: 400 }
-        );
-      }
-
-      targetPath = joinStoragePath(destinationFolder, path.split("/").pop()!);
+      const destination = safeFolderPath(String(body?.destinationFolder || ""), true);
+      const baseName = path.slice(path.lastIndexOf("/") + 1);
+      targetPath = destination ? `${destination}/${baseName}` : baseName;
     } else {
-      return NextResponse.json(
-        { error: "Action inconnue. Utilise rename ou move." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Action inconnue. Utilise rename ou move." }, { status: 400 });
     }
 
-    if (targetPath === path) {
-      return NextResponse.json({ success: true, unchanged: true });
-    }
-
+    if (targetPath === path) return NextResponse.json({ success: true, unchanged: true });
     if (type === "folder" && targetPath.startsWith(`${path}/`)) {
-      return NextResponse.json(
-        { error: "Tu ne peux pas déplacer un dossier à l'intérieur de lui-même." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Tu ne peux pas déplacer un dossier à l'intérieur de lui-même." }, { status: 400 });
+    }
+    if (await entryExists(targetPath, type)) {
+      return NextResponse.json({ error: "Un fichier ou dossier porte déjà ce nom à cet emplacement." }, { status: 409 });
     }
 
-    if (await storageEntryExists(targetPath)) {
-      return NextResponse.json(
-        { error: "Un fichier ou dossier porte déjà ce nom à cet emplacement." },
-        { status: 409 }
-      );
-    }
-
-    const result = await moveStorageEntry(path, targetPath, type);
+    const result = await copyEntry(path, targetPath, type);
     return NextResponse.json({ success: true, targetPath, moved: result.moved });
   } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Erreur lors du renommage ou du déplacement." },
-      { status: 500 }
-    );
+    return NextResponse.json({
+      error: error instanceof Error ? error.message : "Erreur lors du renommage ou du déplacement.",
+    }, { status: 500 });
   }
 }
