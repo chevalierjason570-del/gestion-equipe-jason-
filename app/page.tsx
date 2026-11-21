@@ -3,7 +3,6 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import { supabase } from "@/lib/supabase";
-import * as tus from "tus-js-client";
 
 const menu = [
   { id: "accueil", label: "Accueil", icon: "🏠" },
@@ -21,122 +20,194 @@ type UserProfile = {
   role: string;
 };
 
-const FILES_BUCKET = "fichiers-equipe";
-const MAX_UPLOAD_BYTES = 10_000_000_000; // 10 Go (10 GB en base décimale)
-const SUPABASE_PROJECT_REF = new URL(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!
-).hostname.split(".")[0];
-const TUS_ENDPOINT = `https://${SUPABASE_PROJECT_REF}.storage.supabase.co/storage/v1/upload/resumable`;
-const SUPABASE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!;
+const MAX_UPLOAD_BYTES = 10_000_000_000;
+const MAX_STORAGE_BYTES = 10_000_000_000;
+const B2_PART_CONCURRENCY = 3;
 
-// Supabase Storage n'accepte qu'un jeu précis de caractères ASCII dans les clés.
-// On retire les accents ("lycée" devient "lycee"), on garde les espaces et la
-// ponctuation prise en charge, et on remplace les autres symboles par "_".
-function sanitizeStorageSegment(segment: string) {
-  const transliterated = segment
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[œŒæÆßøØłŁ]/g, character => {
-      const replacements: Record<string, string> = {
-        œ: "oe", Œ: "OE", æ: "ae", Æ: "AE", ß: "ss",
-        ø: "o", Ø: "O", ł: "l", Ł: "L",
-      };
-      return replacements[character] || "_";
-    });
-
-  const safe = transliterated
-    .replace(/[^A-Za-z0-9 _.'!,*&$@=;:+?(),-]/g, "_")
-    .trim();
-
-  if (!safe || safe === "." || safe === ".." || safe === ".folder") {
-    throw new Error(
-      "Nom de fichier ou de dossier invalide après conversion pour Supabase Storage."
-    );
+// B2 accepte les clés UTF-8 : accents, espaces, chiffres et ponctuation sont conservés.
+// Les séparateurs et caractères de contrôle restent interdits dans chaque segment.
+function sanitizeB2Segment(segment: string) {
+  const value = segment.normalize("NFC");
+  if (
+    !value ||
+    !value.trim() ||
+    value === "." ||
+    value === ".." ||
+    value === ".folder" ||
+    /[\u0000-\u001F\u007F-\u009F/\\]/u.test(value)
+  ) {
+    throw new Error(`Nom de fichier ou de dossier invalide : ${segment}`);
   }
-
-  return safe;
+  return value;
 }
 
-function buildSafeStoragePath(folder: string, relativePath: string) {
+function buildB2ObjectKey(folder: string, relativePath: string) {
   const folderParts = folder ? folder.split("/") : [];
   const fileParts = relativePath.split("/");
-
-  if (fileParts.length === 0 || fileParts.some(part => !part.trim())) {
+  if (!fileParts.length || fileParts.some(part => !part.trim())) {
     throw new Error("Le chemin du fichier est vide ou invalide.");
   }
-
-  // Chaque segment est converti séparément : les slashs restent des séparateurs
-  // de dossiers, tandis que les espaces et signes autorisés restent inchangés.
-  return [...folderParts, ...fileParts]
-    .map(part => sanitizeStorageSegment(part))
-    .join("/");
+  const key = [...folderParts, ...fileParts].map(sanitizeB2Segment).join("/");
+  if (new TextEncoder().encode(key).length > 1024) {
+    throw new Error("Le chemin du fichier dépasse la limite de 1 024 octets.");
+  }
+  return key;
 }
 
-function uploadWithTus(
-  file: File,
-  objectName: string,
-  accessToken: string,
-  onProgress: (bytesUploaded: number) => void,
-  upsert = false
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const upload = new tus.Upload(file, {
-      endpoint: TUS_ENDPOINT,
-      retryDelays: [0, 3000, 5000, 10000, 20000],
-      headers: {
-        authorization: `Bearer ${accessToken}`,
-        apikey: SUPABASE_PUBLISHABLE_KEY,
-        "x-upsert": upsert ? "true" : "false",
-      },
-      uploadDataDuringCreation: true,
-      removeFingerprintOnSuccess: true,
-      chunkSize: 6 * 1024 * 1024,
-      metadata: {
-        bucketName: FILES_BUCKET,
-        objectName,
-        contentType: file.type || "application/octet-stream",
-        cacheControl: "3600",
-      },
-      onError: error => reject(error),
-      onProgress: bytesUploaded => onProgress(bytesUploaded),
-      onSuccess: () => resolve(),
-    });
-
-    upload.findPreviousUploads()
-      .then(previousUploads => {
-        if (previousUploads.length > 0) {
-          upload.resumeFromPreviousUpload(previousUploads[0]);
-        }
-        upload.start();
-      })
-      .catch(reject);
+async function b2UploadApi(accessToken: string, body: Record<string, unknown>) {
+  const response = await fetch("/api/admin/files/upload", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify(body),
   });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(result.error || `Erreur du serveur (${response.status}).`);
+  }
+  return result;
 }
 
-// Supabase TUS ne gère pas correctement les fichiers de 0 octet dans tous les cas.
-// On utilise l'upload standard pour ces fichiers vides et TUS pour les autres.
-async function uploadStorageFile(
+const sleep = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));
+
+async function putPartWithRetry(url: string, body: Blob, partNumber: number) {
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      const response = await fetch(url, { method: "PUT", body });
+      if (!response.ok) {
+        throw new Error(`B2 a refusé la partie ${partNumber} (HTTP ${response.status}).`);
+      }
+      const etag = response.headers.get("ETag") || response.headers.get("etag");
+      if (!etag) {
+        throw new Error("B2 n'a pas renvoyé l'ETag. Vérifie la règle CORS du bucket (ExposeHeaders : ETag).");
+      }
+      return etag;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error("Échec du transfert d'une partie.");
+      if (attempt < 3) await sleep(1000 * (attempt + 1));
+    }
+  }
+  throw lastError || new Error("Échec du transfert d'une partie.");
+}
+
+// Envoi multipart B2 : les blocs sont envoyés directement du navigateur vers B2.
+// L'identifiant est conservé dans localStorage pour reprendre le même fichier après une coupure.
+async function uploadFileToB2(
   file: File,
-  objectName: string,
+  objectKey: string,
   accessToken: string,
   onProgress: (bytesUploaded: number) => void,
-  upsert = false
-): Promise<void> {
-  if (file.size === 0) {
-    const { error } = await supabase.storage
-      .from(FILES_BUCKET)
-      .upload(objectName, file, {
-        cacheControl: "3600",
-        contentType: file.type || "application/octet-stream",
-        upsert,
-      });
+  overwrite = false
+) {
+  const contentType = file.type || "application/octet-stream";
+  const resumeStorageKey = `gestion-equipe-b2-upload:${objectKey}:${file.size}:${file.lastModified}`;
 
-    if (error) throw error;
-    onProgress(0);
+  if (file.size > MAX_UPLOAD_BYTES) {
+    throw new Error("Le fichier dépasse la limite de 10 Go.");
+  }
+
+  if (file.size <= 64 * 1024 * 1024) {
+    const init = await b2UploadApi(accessToken, {
+      action: "init", key: objectKey, size: file.size, contentType, overwrite,
+    });
+    if (init.mode !== "single" || !init.url) {
+      throw new Error("B2 n'a pas pu préparer le téléversement direct.");
+    }
+    const response = await fetch(init.url, {
+      method: "PUT",
+      headers: { "Content-Type": contentType },
+      body: file,
+    });
+    if (!response.ok) throw new Error(`B2 a refusé le fichier (HTTP ${response.status}).`);
+    onProgress(file.size);
     return;
   }
 
-  await uploadWithTus(file, objectName, accessToken, onProgress, upsert);
+  let state: { key: string; uploadId: string; partSize: number } | null = null;
+  try {
+    const saved = localStorage.getItem(resumeStorageKey);
+    if (saved) state = JSON.parse(saved);
+  } catch {
+    localStorage.removeItem(resumeStorageKey);
+  }
+
+  let completedParts: Array<{ PartNumber: number; ETag: string }> = [];
+  if (state?.uploadId && state.key === objectKey) {
+    try {
+      const listed = await b2UploadApi(accessToken, {
+        action: "listParts", key: objectKey, uploadId: state.uploadId,
+      });
+      completedParts = listed.parts || [];
+    } catch {
+      state = null;
+      localStorage.removeItem(resumeStorageKey);
+    }
+  }
+
+  if (!state) {
+    const init = await b2UploadApi(accessToken, {
+      action: "init", key: objectKey, size: file.size, contentType, overwrite,
+    });
+    if (init.mode !== "multipart" || !init.uploadId || !init.partSize) {
+      throw new Error("B2 n'a pas pu initialiser le transfert multipart.");
+    }
+    state = { key: objectKey, uploadId: init.uploadId, partSize: init.partSize };
+    localStorage.setItem(resumeStorageKey, JSON.stringify(state));
+  }
+
+  const partSize = state.partSize;
+  const totalParts = Math.ceil(file.size / partSize);
+  const completedMap = new Map<number, string>(
+    completedParts.map(part => [part.PartNumber, part.ETag])
+  );
+  const bytesForParts = () => Array.from(completedMap.keys()).reduce((total, partNumber) => {
+    const start = (partNumber - 1) * partSize;
+    return total + Math.max(0, Math.min(partSize, file.size - start));
+  }, 0);
+  onProgress(bytesForParts());
+
+  for (let first = 1; first <= totalParts; first += B2_PART_CONCURRENCY) {
+    const batch = Array.from(
+      { length: Math.min(B2_PART_CONCURRENCY, totalParts - first + 1) },
+      (_, index) => first + index
+    ).filter(partNumber => !completedMap.has(partNumber));
+    if (!batch.length) continue;
+
+    const signed = await b2UploadApi(accessToken, {
+      action: "signParts",
+      key: objectKey,
+      uploadId: state.uploadId,
+      partNumbers: batch,
+    });
+
+    await Promise.all((signed.urls || []).map(async (item: { partNumber: number; url: string }) => {
+      const start = (item.partNumber - 1) * partSize;
+      const end = Math.min(file.size, start + partSize);
+      const etag = await putPartWithRetry(
+        item.url,
+        file.slice(start, end),
+        item.partNumber
+      );
+      completedMap.set(item.partNumber, etag);
+      onProgress(bytesForParts());
+    }));
+  }
+
+  const parts = Array.from(completedMap.entries())
+    .map(([PartNumber, ETag]) => ({ PartNumber, ETag }))
+    .sort((a, b) => a.PartNumber - b.PartNumber);
+  if (parts.length !== totalParts) {
+    throw new Error("Le transfert est incomplet. Relance le même fichier pour reprendre l'envoi.");
+  }
+
+  await b2UploadApi(accessToken, {
+    action: "complete", key: objectKey, uploadId: state.uploadId, parts,
+  });
+  localStorage.removeItem(resumeStorageKey);
+  onProgress(file.size);
 }
 
 export default function Home() {
@@ -178,6 +249,7 @@ const [newFolderName, setNewFolderName] = useState("");
 const [selectedFile, setSelectedFile] = useState<File | null>(null);
 const [fileActionLoading, setFileActionLoading] = useState(false);
 const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+const [storageUsageBytes, setStorageUsageBytes] = useState(0);
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setUser(data.session?.user ?? null);
@@ -439,6 +511,7 @@ async function loadFiles() {
 
     setFiles(result.files || []);
     setFileUserRole(result.role || "standard");
+    setStorageUsageBytes(Number(result.storage?.usedBytes || 0));
   } catch {
     setFilesError("Erreur de communication avec le serveur.");
   } finally {
@@ -502,7 +575,7 @@ async function createFolder(e: FormEvent) {
   }
 }
 
-// Envoyer un fichier volumineux directement vers Supabase avec TUS
+// Envoyer un fichier directement vers Backblaze B2 avec transfert multipart
 async function uploadFile() {
   if (!selectedFile) {
     setFilesError("Sélectionne d'abord un fichier.");
@@ -528,9 +601,9 @@ async function uploadFile() {
       return;
     }
 
-    const objectName = buildSafeStoragePath(currentFolder, selectedFile.name);
+    const objectName = buildB2ObjectKey(currentFolder, selectedFile.name);
 
-    await uploadStorageFile(selectedFile, objectName, token, bytesUploaded => {
+    await uploadFileToB2(selectedFile, objectName, token, bytesUploaded => {
       const percentage = selectedFile.size > 0
         ? Math.round((bytesUploaded / selectedFile.size) * 100)
         : 100;
@@ -763,13 +836,13 @@ async function uploadFolder() {
       return;
     }
 
-    // Envoi séquentiel : chaque fichier peut reprendre après une interruption réseau.
+    // Envoi séquentiel : chaque fichier reprend ses parties déjà validées par B2 en cas de coupure.
     for (const file of selectedFolderFiles) {
       const relativePath =
         (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
-      const objectName = buildSafeStoragePath(currentFolder, relativePath);
+      const objectName = buildB2ObjectKey(currentFolder, relativePath);
 
-      await uploadStorageFile(file, objectName, token, bytesUploaded => {
+      await uploadFileToB2(file, objectName, token, bytesUploaded => {
         const percentage = totalBytes > 0
           ? Math.round(((completedBytes + bytesUploaded) / totalBytes) * 100)
           : 100;
@@ -1252,6 +1325,23 @@ async function uploadFolder() {
           Créer
         </button>
       </form>
+    </div>
+
+    {/* Quota de stockage gratuit Backblaze B2 */}
+    <div style={{ background: "white", padding: 18, borderRadius: 12, marginBottom: 20 }}>
+      <h3>☁️ Stockage partagé</h3>
+      <p style={{ color: "#475569", marginBottom: 8 }}>
+        {(storageUsageBytes / 1_000_000_000).toFixed(2)} Go utilisés sur 10 Go gratuits.
+      </p>
+      <div style={{ height: 12, background: "#e2e8f0", borderRadius: 999, overflow: "hidden" }}>
+        <div style={{
+          width: `${Math.min(100, (storageUsageBytes / MAX_STORAGE_BYTES) * 100)}%`,
+          height: "100%", background: storageUsageBytes >= MAX_STORAGE_BYTES ? "#dc2626" : "#2563eb",
+        }} />
+      </div>
+      <p style={{ color: "#64748b", fontSize: 12, marginTop: 8 }}>
+        Limite de l'application : 10 Go au total pour l'ensemble des membres.
+      </p>
     </div>
 
     {/* Ajout de fichier */}
