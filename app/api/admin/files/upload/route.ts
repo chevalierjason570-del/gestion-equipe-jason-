@@ -84,6 +84,28 @@ export async function POST(request: Request) {
     const action = String(body?.action || "");
     const s3 = getB2Client();
 
+    if (action === "listExisting") {
+      const requestedPrefix = String(body?.prefix || "");
+      const prefix = requestedPrefix ? `${validateB2Path(requestedPrefix)}/` : "";
+      const objects: Array<{ key: string; size: number }> = [];
+      let continuationToken: string | undefined;
+
+      do {
+        const page = await s3.send(new ListObjectsV2Command({
+          Bucket: B2_BUCKET,
+          Prefix: prefix,
+          ContinuationToken: continuationToken,
+          MaxKeys: 1000,
+        }));
+        for (const item of page.Contents || []) {
+          if (item.Key) objects.push({ key: item.Key, size: item.Size || 0 });
+        }
+        continuationToken = page.IsTruncated ? page.NextContinuationToken : undefined;
+      } while (continuationToken);
+
+      return NextResponse.json({ objects });
+    }
+
     if (action === "usage") {
       const usedBytes = await getStoredBytes(s3);
       return NextResponse.json({
