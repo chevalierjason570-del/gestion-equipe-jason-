@@ -285,6 +285,7 @@ export default function Home() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [user, setUser] = useState<any>(null);
+  const [currentUserRole, setCurrentUserRole] = useState<string>("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [active, setActive] = useState("accueil");
@@ -334,6 +335,49 @@ const [storageUsageBytes, setStorageUsageBytes] = useState(0);
     return () => listener.subscription.unsubscribe();
   }, []);
 
+  // Le rôle est vérifié côté serveur : les comptes standard ne reçoivent
+  // jamais les rubriques d'administration dans leur menu.
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!user?.id) {
+      setCurrentUserRole("");
+      return;
+    }
+
+    setCurrentUserRole("");
+    (async () => {
+      try {
+        const { data } = await supabase.auth.getSession();
+        const token = data.session?.access_token;
+        if (!token) throw new Error("Session absente.");
+
+        const response = await fetch("/api/profile", {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.error || "Rôle introuvable.");
+
+        if (!cancelled) {
+          setCurrentUserRole(result.role === "admin" ? "admin" : "standard");
+        }
+      } catch {
+        // En cas d'échec, appliquer le principe du moindre privilège.
+        if (!cancelled) setCurrentUserRole("standard");
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (currentUserRole && currentUserRole !== "admin" &&
+        (active === "utilisateurs" || active === "roles")) {
+      setActive("accueil");
+    }
+  }, [currentUserRole, active]);
+
 
   async function login(e: FormEvent) {
     e.preventDefault();
@@ -373,6 +417,7 @@ const [storageUsageBytes, setStorageUsageBytes] = useState(0);
   async function logout() {
     await supabase.auth.signOut();
     setUser(null);
+    setCurrentUserRole("");
     setActive("accueil");
   }
 
@@ -977,7 +1022,11 @@ async function uploadFolder() {
   }
 }
 
-  const current = menu.find(item => item.id === active);
+  const isAdmin = currentUserRole === "admin";
+  const visibleMenu = isAdmin
+    ? menu
+    : menu.filter(item => item.id !== "utilisateurs" && item.id !== "roles");
+  const current = visibleMenu.find(item => item.id === active) || menu[0];
 
   const inputStyle = {
     width: "100%",
@@ -1063,7 +1112,7 @@ async function uploadFolder() {
         <h2>Gestion Équipe</h2>
         <p style={{ color: "#94a3b8", fontSize: 11 }}>MENU PRINCIPAL</p>
 
-        {menu.map(item => (
+        {visibleMenu.map(item => (
           <button
             key={item.id}
             onClick={() => setActive(item.id)}
@@ -1141,7 +1190,7 @@ async function uploadFolder() {
               gap: 18,
               marginTop: 25
             }}>
-              {menu.slice(1, 5).map(item => (
+              {visibleMenu.filter(item => item.id !== "accueil" && item.id !== "parametres").map(item => (
                 <button key={item.id}
                   onClick={() => setActive(item.id)}
                   style={{
@@ -1161,7 +1210,7 @@ async function uploadFolder() {
           </>
         )}
 
-        {active === "utilisateurs" && (
+        {isAdmin && active === "utilisateurs" && (
           <>
             <h2>Gestion des utilisateurs</h2>
             <p style={{ color: "#64748b" }}>
@@ -1796,6 +1845,7 @@ async function uploadFolder() {
 
         {active !== "accueil" &&
  active !== "utilisateurs" &&
+ active !== "roles" &&
  active !== "fichiers" &&
  active !== "messages" && (
           <div style={{
