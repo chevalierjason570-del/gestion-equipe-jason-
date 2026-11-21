@@ -8,6 +8,10 @@ type Contact = {
   username: string;
   display_name: string;
   role: string;
+  hasConversation?: boolean;
+  conversationId?: string | null;
+  lastMessage?: string;
+  lastMessageAt?: string | null;
 };
 
 type Conversation = {
@@ -125,9 +129,10 @@ export default function Messenger({ currentUserId }: Props) {
 
   const loadSidebar = useCallback(async () => {
     const result = await requestJson("/api/messages");
-    setContacts(result.contacts || []);
+    setContacts(result.users || result.contacts || []);
     setConversations(result.conversations || []);
     setCurrentRole(result.currentUser?.role || "standard");
+    setNotice(result.setupWarning || "");
     return result;
   }, [requestJson]);
 
@@ -389,7 +394,7 @@ export default function Messenger({ currentUserId }: Props) {
           style={{ width: "100%", boxSizing: "border-box", padding: 10, border: "1px solid #cbd5e1", borderRadius: 8, marginBottom: 12 }}
         />
         <h3 style={{ fontSize: 13, color: "#64748b", margin: "8px 0" }}>
-          {currentRole === "admin" ? "CONTACTER UN MEMBRE" : "CONTACTER L'ADMINISTRATEUR"}
+          {currentRole === "admin" ? `TOUS LES UTILISATEURS (${filteredContacts.length})` : "CONTACTER L'ADMINISTRATEUR"}
         </h3>
         <div style={{ maxHeight: 180, overflowY: "auto", marginBottom: 16 }}>
           {loading ? <p style={{ color: "#64748b", fontSize: 13 }}>Chargement des membres…</p> : filteredContacts.map(contact => (
@@ -403,16 +408,18 @@ export default function Messenger({ currentUserId }: Props) {
               </span>
               <span style={{ minWidth: 0, flex: 1 }}>
                 <strong style={{ display: "block", fontSize: 13, overflow: "hidden", textOverflow: "ellipsis" }}>{contact.display_name || contact.username}</strong>
-                <small style={{ color: "#64748b" }}>{contact.role === "admin" ? "Administrateur" : "Membre"}</small>
+                <small style={{ display: "block", color: "#64748b" }}>{contact.role === "admin" ? "Administrateur" : "Membre"}</small>
+                {currentRole === "admin" && <small style={{ display: "block", color: contact.hasConversation ? "#15803d" : "#2563eb", marginTop: 2 }}>{contact.hasConversation ? (contact.lastMessage || "Conversation existante") : "Nouvelle conversation"}</small>}
               </span>
-              <span style={{ color: "#2563eb" }}>＋</span>
+              <span style={{ color: "#2563eb", fontSize: 12, fontWeight: 700 }}>{contact.hasConversation ? "Ouvrir" : "＋"}</span>
             </button>
           ))}
           {!loading && filteredContacts.length === 0 && (
             <p style={{ color: "#64748b", fontSize: 13 }}>
-              {currentRole === "admin" ? "Aucun membre disponible." : "Aucun administrateur disponible."}
+              {currentRole === "admin" ? "Aucun autre utilisateur membre trouvé dans profiles." : "Aucun administrateur disponible."}
             </p>
           )}
+          {notice && !selectedConversation && <p role="status" style={{ color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", padding: 9, borderRadius: 8, fontSize: 12 }}>{notice}</p>}
         </div>
         <h3 style={{ fontSize: 13, color: "#64748b", margin: "8px 0" }}>CONVERSATIONS</h3>
         <div style={{ maxHeight: 310, overflowY: "auto" }}>
@@ -429,7 +436,7 @@ export default function Messenger({ currentUserId }: Props) {
           ))}
           {!loading && conversations.length === 0 && (
             <p style={{ color: "#64748b", fontSize: 13 }}>
-              {currentRole === "admin" ? "Aucune conversation. Choisis un membre ci-dessus." : "Aucune conversation. Contacte l'administrateur ci-dessus."}
+              {currentRole === "admin" ? "Aucune conversation active. La liste ci-dessus affiche tous les membres ; clique sur un nom pour ouvrir sa conversation privée." : "Aucune conversation. Contacte l'administrateur ci-dessus."}
             </p>
           )}
         </div>
