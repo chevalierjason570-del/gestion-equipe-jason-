@@ -221,10 +221,19 @@ export default function Messenger({ currentUserId }: Props) {
     setError("");
     setNotice("");
     try {
-      await requestJson(`/api/messages/${selectedConversation.id}`, {
+      const sendResult = await requestJson(`/api/messages/${selectedConversation.id}`, {
         method: "POST",
         body: JSON.stringify({ body: text, messageType: "text" }),
       });
+      if (currentRole !== "admin") {
+        if (sendResult.emailNotification === "sent") {
+          setNotice("Message envoyé. Une notification e-mail a été envoyée à l'administrateur.");
+        } else if (sendResult.emailNotification === "not_configured") {
+          setNotice("Message envoyé. Les notifications e-mail ne sont pas encore configurées.");
+        } else if (sendResult.emailNotification === "failed") {
+          setNotice("Message envoyé, mais la notification e-mail n'a pas pu être envoyée.");
+        }
+      }
       setDraft("");
       await loadMessages(selectedConversation.id, true);
       await loadSidebar();
@@ -272,7 +281,7 @@ export default function Messenger({ currentUserId }: Props) {
         throw new Error(`Backblaze a refusé la pièce jointe (HTTP ${uploadResponse.status}${detail ? ` : ${detail.slice(0, 180)}` : ""}).`);
       }
 
-      await requestJson(`/api/messages/${selectedConversation.id}`, {
+      const sendResult = await requestJson(`/api/messages/${selectedConversation.id}`, {
         method: "POST",
         body: JSON.stringify({
           body: "",
@@ -284,7 +293,16 @@ export default function Messenger({ currentUserId }: Props) {
         }),
       });
       uploadedKey = "";
-      setNotice("Pièce jointe envoyée.");
+      const emailSuffix = currentRole !== "admin"
+        ? sendResult.emailNotification === "sent"
+          ? " Une notification e-mail a été envoyée à l'administrateur."
+          : sendResult.emailNotification === "not_configured"
+            ? " Les notifications e-mail ne sont pas encore configurées."
+            : sendResult.emailNotification === "failed"
+              ? " La notification e-mail n'a pas pu être envoyée."
+              : ""
+        : "";
+      setNotice(`Pièce jointe envoyée.${emailSuffix}`);
       await loadMessages(selectedConversation.id, true);
       await loadSidebar();
     } catch (err) {
@@ -386,6 +404,11 @@ export default function Messenger({ currentUserId }: Props) {
             ? "Tu peux discuter en privé avec chaque membre, un par un."
             : "Tu peux uniquement discuter en privé avec l'administrateur."}
         </p>
+        {currentRole !== "admin" && (
+          <p style={{ margin: "-4px 0 12px", color: "#64748b", fontSize: 11 }}>
+            Chaque message envoyé à l'administrateur déclenche une notification e-mail.
+          </p>
+        )}
         <input
           value={search}
           onChange={event => setSearch(event.target.value)}
@@ -460,7 +483,7 @@ export default function Messenger({ currentUserId }: Props) {
                 </div>
               ) : messages.map(message => {
                 const own = message.sender_id === currentUserId;
-                const canDelete = currentRole === "admin" || own;
+                const canDelete = currentRole === "admin";
                 return (
                   <div key={message.id} style={{ display: "flex", justifyContent: own ? "flex-end" : "flex-start", marginBottom: 12 }}>
                     <article style={{ maxWidth: "min(78%, 560px)", background: own ? "#dbeafe" : "#fff", border: "1px solid #dbe3ef", borderRadius: 12, padding: 10, boxShadow: "0 1px 2px rgba(15,23,42,.04)" }}>
