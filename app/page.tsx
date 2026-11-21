@@ -286,6 +286,7 @@ export default function Home() {
   const [password, setPassword] = useState("");
   const [user, setUser] = useState<any>(null);
   const [currentUserRole, setCurrentUserRole] = useState<string>("");
+  const [currentDisplayName, setCurrentDisplayName] = useState<string>("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [active, setActive] = useState("accueil");
@@ -342,10 +343,12 @@ const [storageUsageBytes, setStorageUsageBytes] = useState(0);
 
     if (!user?.id) {
       setCurrentUserRole("");
+      setCurrentDisplayName("");
       return;
     }
 
     setCurrentUserRole("");
+    setCurrentDisplayName("");
     (async () => {
       try {
         const { data } = await supabase.auth.getSession();
@@ -361,10 +364,21 @@ const [storageUsageBytes, setStorageUsageBytes] = useState(0);
 
         if (!cancelled) {
           setCurrentUserRole(result.role === "admin" ? "admin" : "standard");
+          setCurrentDisplayName(
+            typeof result.display_name === "string" && result.display_name.trim()
+              ? result.display_name.trim()
+              : typeof result.username === "string" && result.username.trim()
+                ? result.username.trim()
+                : "Utilisateur"
+          );
         }
       } catch {
         // En cas d'échec, appliquer le principe du moindre privilège.
-        if (!cancelled) setCurrentUserRole("standard");
+        // Ne jamais afficher l'adresse e-mail comme solution de repli.
+        if (!cancelled) {
+          setCurrentUserRole("standard");
+          setCurrentDisplayName("Utilisateur");
+        }
       }
     })();
 
@@ -1175,7 +1189,7 @@ async function uploadFolder() {
             borderRadius: 8,
             color: "#1d4ed8"
           }}>
-            👤 {user.email}
+            👤 {currentDisplayName || "Utilisateur"}
           </div>
         </header>
 
