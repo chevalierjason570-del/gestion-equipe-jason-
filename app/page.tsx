@@ -22,7 +22,7 @@ type UserProfile = {
 
 const MAX_UPLOAD_BYTES = 10_000_000_000;
 const MAX_STORAGE_BYTES = 10_000_000_000;
-const B2_PART_CONCURRENCY = 3;
+const B2_PART_CONCURRENCY = 1; // Limite les pics de requêtes vers Backblaze.
 
 // B2 accepte les clés UTF-8 : accents, espaces, chiffres et ponctuation sont conservés.
 // Les séparateurs et caractères de contrôle restent interdits dans chaque segment.
@@ -72,25 +72,57 @@ async function b2UploadApi(accessToken: string, body: Record<string, unknown>) {
 
 const sleep = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));
 
+function getRetryAfterMilliseconds(response: Response | null): number | null {
+  const value = response?.headers.get("Retry-After");
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const date = Date.parse(value);
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : null;
+}
+
 async function putPartWithRetry(url: string, body: Blob, partNumber: number) {
-  let lastError: Error | null = null;
-  for (let attempt = 0; attempt < 4; attempt++) {
+  const maxAttempts = 8;
+  let lastMessage = "Erreur réseau inconnue.";
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    let response: Response | null = null;
+
     try {
-      const response = await fetch(url, { method: "PUT", body });
-      if (!response.ok) {
-        throw new Error(`B2 a refusé la partie ${partNumber} (HTTP ${response.status}).`);
-      }
+      response = await fetch(url, { method: "PUT", body });
+    } catch (error) {
+      lastMessage = error instanceof Error ? error.message : "Erreur réseau.";
+    }
+
+    if (response?.ok) {
       const etag = response.headers.get("ETag") || response.headers.get("etag");
       if (!etag) {
         throw new Error("B2 n'a pas renvoyé l'ETag. Vérifie la règle CORS du bucket (ExposeHeaders : ETag).");
       }
       return etag;
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error("Échec du transfert d'une partie.");
-      if (attempt < 3) await sleep(1000 * (attempt + 1));
     }
+
+    if (response) {
+      const responseText = await response.text().catch(() => "");
+      lastMessage = `HTTP ${response.status}${responseText ? ` : ${responseText.slice(0, 300)}` : ""}`;
+      const retryable = [408, 429, 500, 502, 503, 504].includes(response.status);
+      if (!retryable) {
+        throw new Error(`B2 a refusé la partie ${partNumber} (${lastMessage}).`);
+      }
+    }
+
+    if (attempt === maxAttempts - 1) break;
+
+    // Backoff exponentiel avec jitter, en tenant compte de Retry-After si CORS l'expose.
+    const exponentialDelay = Math.min(30_000, 1_000 * (2 ** attempt));
+    const jitteredDelay = Math.round(exponentialDelay * (0.8 + Math.random() * 0.4));
+    const retryAfter = getRetryAfterMilliseconds(response);
+    await sleep(Math.max(jitteredDelay, retryAfter || 0));
   }
-  throw lastError || new Error("Échec du transfert d'une partie.");
+
+  throw new Error(
+    `B2 est temporairement indisponible pour la partie ${partNumber} après ${maxAttempts} tentatives (${lastMessage}). Relance le même dossier : les fichiers déjà terminés seront conservés et les parties validées de ce fichier pourront être reprises.`
+  );
 }
 
 // Envoi multipart B2 : les blocs sont envoyés directement du navigateur vers B2.
@@ -805,7 +837,7 @@ async function uploadFolder() {
   }
 
   if (!window.confirm(
-    "Si certains fichiers existent déjà au même emplacement, ils seront remplacés. Continuer ?"
+    "Pour reprendre un envoi interrompu, les fichiers déjà présents avec le même chemin et la même taille seront ignorés. Si un fichier a changé sans changer de taille, il ne sera pas renvoyé automatiquement. Les fichiers de taille différente seront remplacés. Continuer ?"
   )) {
     return;
   }
@@ -824,6 +856,7 @@ async function uploadFolder() {
   setFilesSuccess("");
 
   let uploadedCount = 0;
+  let skippedCount = 0;
   const totalBytes = selectedFolderFiles.reduce((total, file) => total + file.size, 0);
   let completedBytes = 0;
 
@@ -836,11 +869,46 @@ async function uploadFolder() {
       return;
     }
 
+    // Cherche d'abord les objets déjà présents dans le sous-dossier sélectionné.
+    // Cela évite de renvoyer les centaines de fichiers déjà reçus lors d'une tentative précédente.
+    const relativePaths = selectedFolderFiles.map(file =>
+      (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
+    );
+    const directoryParts = relativePaths.map(path => path.split("/").slice(0, -1));
+    let commonParts = directoryParts.length ? [...directoryParts[0]] : [];
+    for (const parts of directoryParts.slice(1)) {
+      let shared = 0;
+      while (shared < commonParts.length && shared < parts.length && commonParts[shared] === parts[shared]) {
+        shared++;
+      }
+      commonParts = commonParts.slice(0, shared);
+    }
+    const commonPrefix = [currentFolder, ...commonParts].filter(Boolean).join("/");
+    const existingResult = await b2UploadApi(token, {
+      action: "listExisting",
+      prefix: commonPrefix,
+    });
+    const existingSizes = new Map<string, number>(
+      (existingResult.objects || []).map((item: { key: string; size: number }) => [item.key, item.size])
+    );
+
     // Envoi séquentiel : chaque fichier reprend ses parties déjà validées par B2 en cas de coupure.
     for (const file of selectedFolderFiles) {
       const relativePath =
         (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
       const objectName = buildB2ObjectKey(currentFolder, relativePath);
+
+      // Les fichiers déjà finalisés dans B2 avec la même taille sont conservés.
+      if (existingSizes.get(objectName) === file.size) {
+        completedBytes += file.size;
+        uploadedCount += 1;
+        skippedCount += 1;
+        const percentage = totalBytes > 0
+          ? Math.round((completedBytes / totalBytes) * 100)
+          : 100;
+        setUploadProgress(Math.min(100, percentage));
+        continue;
+      }
 
       await uploadFileToB2(file, objectName, token, bytesUploaded => {
         const percentage = totalBytes > 0
@@ -851,15 +919,18 @@ async function uploadFolder() {
 
       completedBytes += file.size;
       uploadedCount += 1;
+      existingSizes.set(objectName, file.size);
     }
 
     setSelectedFolderFiles([]);
-    setFilesSuccess(`${uploadedCount} fichier(s) envoyé(s) avec succès !`);
+    setFilesSuccess(
+      `${uploadedCount - skippedCount} fichier(s) envoyé(s), ${skippedCount} déjà présent(s) conservé(s).`
+    );
     await loadFiles();
   } catch (error) {
     const detail = error instanceof Error ? ` ${error.message}` : "";
     setFilesError(
-      `Envoi interrompu après ${uploadedCount} fichier(s) envoyé(s).${detail}`
+      `Envoi interrompu après ${uploadedCount} fichier(s) envoyé(s) ou déjà présents (${skippedCount} conservé(s)). Relance le même dossier pour reprendre.${detail}`
     );
   } finally {
     setFileActionLoading(false);
