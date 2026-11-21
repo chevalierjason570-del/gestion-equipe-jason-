@@ -29,7 +29,7 @@ export async function GET(request: Request) {
 
   const { data: profile, error } = await supabase
     .from("profiles")
-    .select("id, role")
+    .select("id, username, display_name, role")
     .eq("id", authData.user.id)
     .single();
 
@@ -41,7 +41,12 @@ export async function GET(request: Request) {
   }
 
   return NextResponse.json(
-    { id: authData.user.id, role: profile.role === "admin" ? "admin" : "standard" },
+    {
+      id: authData.user.id,
+      username: profile.username || "",
+      display_name: profile.display_name || profile.username || "Utilisateur",
+      role: profile.role === "admin" ? "admin" : "standard",
+    },
     { headers: { "Cache-Control": "no-store" } }
   );
 }
