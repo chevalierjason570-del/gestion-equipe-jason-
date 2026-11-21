@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { getB2Client, B2_BUCKET, validateB2Path } from "@/lib/b2";
+import { sendAdminMessageNotification } from "@/lib/messaging-email";
 import {
   authenticateMessagingRequest,
   getConversationForUser,
@@ -123,7 +124,45 @@ export async function POST(request: Request, context: RouteContext) {
       .update({ last_message_at: new Date().toISOString() })
       .eq("id", conversationId);
 
-    return NextResponse.json({ message: created });
+    // A member's message triggers an email notification to the admin in this
+    // private conversation. Email is best-effort and never rolls back the chat message.
+    let emailNotification: "sent" | "not_configured" | "failed" | "not_needed" = "not_needed";
+    if (user.role !== "admin") {
+      try {
+        const adminUserId = conversation.user_a === user.id
+          ? conversation.user_b
+          : conversation.user_a;
+        const { data: adminAuth, error: adminLookupError } =
+          await messagingSupabase.auth.admin.getUserById(adminUserId);
+        const configuredRecipient = process.env.MESSAGING_ADMIN_EMAIL?.trim();
+        const recipient = configuredRecipient || adminAuth.user?.email?.trim() || "";
+
+        if (!recipient) {
+          console.error(
+            "Admin message notification skipped: the admin email could not be resolved.",
+            adminLookupError?.message || ""
+          );
+          emailNotification = "failed";
+        } else {
+          const notificationResult = await sendAdminMessageNotification({
+            messageId: created.id,
+            recipient,
+            senderName: user.display_name || user.username || "Un membre",
+            body: text,
+            messageType,
+            attachmentName,
+          });
+          emailNotification = notificationResult.status;
+        }
+      } catch (notificationError) {
+        // The message is already saved. Never report a failed chat send because
+        // the separate e-mail provider is unavailable.
+        console.error("Admin e-mail notification could not be prepared:", notificationError);
+        emailNotification = "failed";
+      }
+    }
+
+    return NextResponse.json({ message: created, emailNotification });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Erreur pendant l'envoi du message." }, { status: 400 });
   }
@@ -134,6 +173,10 @@ export async function DELETE(request: Request, context: RouteContext) {
   if (!user) return NextResponse.json({ error: "Connexion obligatoire." }, { status: 401 });
   const { conversationId } = await context.params;
   if (!isUuid(conversationId)) return NextResponse.json({ error: "Conversation invalide." }, { status: 400 });
+
+  if (user.role !== "admin") {
+    return NextResponse.json({ error: "Seul l'administrateur peut supprimer les messages." }, { status: 403 });
+  }
 
   const conversation = await getConversationForUser(conversationId, user);
   if (!conversation) return NextResponse.json({ error: "Conversation privée introuvable." }, { status: 404 });
@@ -151,10 +194,6 @@ export async function DELETE(request: Request, context: RouteContext) {
       .maybeSingle();
 
     if (messageError || !message) return NextResponse.json({ error: "Message introuvable." }, { status: 404 });
-    if (user.role !== "admin" && message.sender_id !== user.id) {
-      return NextResponse.json({ error: "Tu ne peux supprimer que tes propres messages." }, { status: 403 });
-    }
-
     if (message.attachment_key) {
       await getB2Client().send(new DeleteObjectCommand({ Bucket: B2_BUCKET, Key: message.attachment_key }));
     }
