@@ -81,15 +81,26 @@ function getRetryAfterMilliseconds(response: Response | null): number | null {
   return Number.isFinite(date) ? Math.max(0, date - Date.now()) : null;
 }
 
-async function putPartWithRetry(url: string, body: Blob, partNumber: number) {
-  const maxAttempts = 8;
+async function putPartWithRetry(
+  initialUrl: string,
+  body: Blob,
+  partNumber: number,
+  accessToken: string,
+  objectKey: string,
+  uploadId: string
+) {
+  // B2 may return a transient 503 for UploadPart. Keep the same multipart
+  // upload and part number, but request a fresh presigned URL before retrying.
+  const maxAttempts = 10;
+  let activeUrl = initialUrl;
   let lastMessage = "Erreur réseau inconnue.";
+  let lastRequestId = "";
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     let response: Response | null = null;
 
     try {
-      response = await fetch(url, { method: "PUT", body });
+      response = await fetch(activeUrl, { method: "PUT", body });
     } catch (error) {
       lastMessage = error instanceof Error ? error.message : "Erreur réseau.";
     }
@@ -105,6 +116,7 @@ async function putPartWithRetry(url: string, body: Blob, partNumber: number) {
     if (response) {
       const responseText = await response.text().catch(() => "");
       lastMessage = `HTTP ${response.status}${responseText ? ` : ${responseText.slice(0, 300)}` : ""}`;
+      lastRequestId = response.headers.get("x-amz-request-id") || response.headers.get("x-bz-request-id") || "";
       const retryable = [408, 429, 500, 502, 503, 504].includes(response.status);
       if (!retryable) {
         throw new Error(`B2 a refusé la partie ${partNumber} (${lastMessage}).`);
@@ -113,15 +125,38 @@ async function putPartWithRetry(url: string, body: Blob, partNumber: number) {
 
     if (attempt === maxAttempts - 1) break;
 
-    // Backoff exponentiel avec jitter, en tenant compte de Retry-After si CORS l'expose.
-    const exponentialDelay = Math.min(30_000, 1_000 * (2 ** attempt));
+    // Exponential backoff with jitter. Respect Retry-After when CORS exposes it.
+    const exponentialDelay = Math.min(120_000, 2_000 * (2 ** attempt));
     const jitteredDelay = Math.round(exponentialDelay * (0.8 + Math.random() * 0.4));
     const retryAfter = getRetryAfterMilliseconds(response);
     await sleep(Math.max(jitteredDelay, retryAfter || 0));
+
+    // Refresh the URL for this same multipart upload and part. Re-uploading
+    // the same part number is safe: it replaces that part in the open upload.
+    try {
+      const refreshed = await b2UploadApi(accessToken, {
+        action: "signParts",
+        key: objectKey,
+        uploadId,
+        partNumbers: [partNumber],
+      });
+      const freshPart = Array.isArray(refreshed.urls)
+        ? refreshed.urls.find((item: { partNumber: number; url: string }) => item.partNumber === partNumber)
+        : null;
+      if (!freshPart?.url) {
+        throw new Error("B2 n'a pas fourni de nouvelle URL de téléversement.");
+      }
+      activeUrl = freshPart.url;
+    } catch (refreshError) {
+      const refreshMessage = refreshError instanceof Error ? refreshError.message : "Erreur de renouvellement de l'URL.";
+      lastMessage = `${lastMessage} ; renouvellement URL : ${refreshMessage}`;
+      // Keep the previous URL as a fallback; it may still be valid.
+    }
   }
 
+  const requestInfo = lastRequestId ? ` ; request ID ${lastRequestId}` : "";
   throw new Error(
-    `B2 est temporairement indisponible pour la partie ${partNumber} après ${maxAttempts} tentatives (${lastMessage}). Relance le même dossier : les fichiers déjà terminés seront conservés et les parties validées de ce fichier pourront être reprises.`
+    `Backblaze refuse toujours la partie ${partNumber} après ${maxAttempts} tentatives (${lastMessage}${requestInfo}). Le transfert multipart reste en attente : relance le même fichier dans le même navigateur pour reprendre les parties confirmées. Si le 503 persiste, consulte le statut Backblaze ou contacte leur support avec le request ID.`
   );
 }
 
@@ -221,7 +256,10 @@ async function uploadFileToB2(
       const etag = await putPartWithRetry(
         item.url,
         file.slice(start, end),
-        item.partNumber
+        item.partNumber,
+        accessToken,
+        objectKey,
+        state.uploadId
       );
       completedMap.set(item.partNumber, etag);
       onProgress(bytesForParts());
