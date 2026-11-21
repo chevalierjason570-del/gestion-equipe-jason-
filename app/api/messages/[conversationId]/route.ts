@@ -2,8 +2,7 @@ import { NextResponse } from "next/server";
 import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { getB2Client, B2_BUCKET, validateB2Path } from "@/lib/b2";
-import { sendAdminMessageNotification } from "@/lib/messaging-email";
-import {
+import { sendAdminMessageNotification } from "../../../../lib/messaging-email";import {
   authenticateMessagingRequest,
   getConversationForUser,
   isUuid,
