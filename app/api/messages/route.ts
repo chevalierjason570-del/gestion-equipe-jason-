@@ -8,45 +8,78 @@ import {
 
 export const runtime = "nodejs";
 
+type DbError = { code?: string; message?: string; details?: string; hint?: string };
+
+function describeDatabaseError(context: string, error: DbError) {
+  const code = error.code || "DB_ERROR";
+  const message = error.message || "Erreur inconnue de la base de données.";
+
+  if (code === "42P01" || code === "PGRST205") {
+    return `${context} : table de messagerie introuvable. Ouvre Supabase > SQL Editor et exécute entièrement supabase/messaging.sql, puis actualise la page.`;
+  }
+  if (code === "42703" || code === "PGRST204") {
+    return `${context} : une colonne de la messagerie manque (${message}). Réexécute le script de mise à jour supabase/messaging.sql fourni avec le projet.`;
+  }
+  if (code === "42501") {
+    return `${context} : permission refusée. Vérifie que SUPABASE_SERVICE_ROLE_KEY est définie dans Vercel et que le site a été redéployé.`;
+  }
+  return `${context} (${code}) : ${message}`;
+}
+
 /**
- * Règle de messagerie :
- * - un membre standard peut uniquement démarrer une conversation avec un admin ;
- * - un admin peut uniquement démarrer une conversation avec un membre non-admin ;
- * - aucune conversation membre ↔ membre ou admin ↔ admin n'est autorisée.
+ * GET renvoie toujours la liste de contacts autorisés.
+ * Pour un administrateur, contacts contient TOUS les comptes non-admin,
+ * avec un indicateur de présence d'une conversation individuelle.
+ * Pour un membre, contacts contient uniquement les comptes administrateur.
  */
 export async function GET(request: Request) {
   const user = await authenticateMessagingRequest(request);
-  if (!user) return NextResponse.json({ error: "Connexion obligatoire." }, { status: 401 });
+  if (!user) {
+    return NextResponse.json({ error: "Connexion obligatoire. Reconnecte-toi à Gestion Équipe." }, { status: 401 });
+  }
 
+  const isAdmin = user.role === "admin";
+
+  // Administrateur : afficher tous les membres. Membre : afficher uniquement l'administrateur.
   let contactsQuery = messagingSupabase
     .from("profiles")
     .select("id, username, display_name, role")
     .neq("id", user.id)
     .order("display_name", { ascending: true });
 
-  // L'admin voit les membres à contacter ; un membre ne voit que les admins.
-  contactsQuery = user.role === "admin"
+  contactsQuery = isAdmin
     ? contactsQuery.neq("role", "admin")
     : contactsQuery.eq("role", "admin");
 
   const { data: contacts, error: contactsError } = await contactsQuery;
   if (contactsError) {
-    return NextResponse.json({ error: "Impossible de charger les contacts autorisés." }, { status: 500 });
+    return NextResponse.json({
+      error: describeDatabaseError("Impossible de charger la liste des utilisateurs", contactsError),
+      databaseCode: contactsError.code || null,
+    }, { status: 500 });
   }
 
-  // Une conversation doit toujours contenir le compte connecté.
   const { data: candidateConversations, error: conversationsError } = await messagingSupabase
     .from("direct_conversations")
     .select("id, user_a, user_b, created_at, last_message_at")
     .or(`user_a.eq.${user.id},user_b.eq.${user.id}`)
     .order("last_message_at", { ascending: false });
 
+  // Si les tables ne sont pas encore créées, on laisse malgré tout l'admin voir
+  // la liste complète des membres, avec un avertissement explicite.
   if (conversationsError) {
-    return NextResponse.json({ error: "Impossible de charger les conversations. Vérifie que supabase/messaging.sql a été exécuté." }, { status: 500 });
+    const warning = describeDatabaseError("La liste des utilisateurs est chargée, mais les conversations ne sont pas disponibles", conversationsError);
+    if (conversationsError.code === "42P01" || conversationsError.code === "PGRST205" || conversationsError.code === "42703" || conversationsError.code === "PGRST204") {
+      return NextResponse.json({
+        currentUser: { id: user.id, role: user.role, display_name: user.display_name },
+        contacts: (contacts || []).map(contact => ({ ...contact, hasConversation: false, conversationId: null, lastMessage: "Conversation à créer", lastMessageAt: null })),
+        conversations: [],
+        setupWarning: warning,
+      });
+    }
+    return NextResponse.json({ error: warning, databaseCode: conversationsError.code || null }, { status: 500 });
   }
 
-  // Filtre aussi les anciennes conversations qui auraient été créées avant
-  // l'application de la règle admin ↔ membre.
   const allowedContactIds = new Set((contacts || []).map(contact => contact.id));
   const conversations = (candidateConversations || []).filter(conversation => {
     const otherId = conversation.user_a === user.id ? conversation.user_b : conversation.user_a;
@@ -55,6 +88,7 @@ export async function GET(request: Request) {
 
   const conversationIds = conversations.map(item => item.id);
   let lastMessages: any[] = [];
+  let setupWarning = "";
   if (conversationIds.length) {
     const { data, error } = await messagingSupabase
       .from("direct_messages")
@@ -62,16 +96,28 @@ export async function GET(request: Request) {
       .in("conversation_id", conversationIds)
       .order("created_at", { ascending: false })
       .limit(500);
-    if (error) return NextResponse.json({ error: "Impossible de charger les derniers messages." }, { status: 500 });
-    lastMessages = data || [];
+
+    if (error) {
+      setupWarning = describeDatabaseError("Les conversations sont chargées, mais les messages ne peuvent pas être lus", error);
+    } else {
+      lastMessages = data || [];
+    }
   }
 
   const lastByConversation = new Map<string, any>();
   for (const message of lastMessages) {
-    if (!lastByConversation.has(message.conversation_id)) lastByConversation.set(message.conversation_id, message);
+    if (!lastByConversation.has(message.conversation_id)) {
+      lastByConversation.set(message.conversation_id, message);
+    }
   }
 
   const profileMap = new Map((contacts || []).map(contact => [contact.id, contact]));
+  const conversationByUser = new Map<string, (typeof conversations)[number]>();
+  for (const conversation of conversations) {
+    const otherId = conversation.user_a === user.id ? conversation.user_b : conversation.user_a;
+    conversationByUser.set(otherId, conversation);
+  }
+
   const conversationSummaries = conversations.map(conversation => {
     const otherId = conversation.user_a === user.id ? conversation.user_b : conversation.user_a;
     const other = profileMap.get(otherId)!;
@@ -88,10 +134,29 @@ export async function GET(request: Request) {
     };
   });
 
+  // Pour l'administrateur, chaque utilisateur apparaît dans la liste, même
+  // s'il n'a pas encore de conversation. Cliquer dessus créera son échange privé.
+  const contactsWithConversation = (contacts || []).map(contact => {
+    const conversation = conversationByUser.get(contact.id);
+    const lastMessage = conversation ? lastByConversation.get(conversation.id) : null;
+    return {
+      ...contact,
+      hasConversation: Boolean(conversation),
+      conversationId: conversation?.id || null,
+      lastMessage: lastMessage
+        ? (lastMessage.body || (lastMessage.message_type === "image" ? "Photo" : lastMessage.message_type === "audio" ? "Message vocal" : lastMessage.attachment_name || "Fichier"))
+        : conversation ? "Conversation ouverte · aucun message" : "Aucune conversation · cliquer pour démarrer",
+      lastMessageAt: lastMessage?.created_at || conversation?.last_message_at || null,
+    };
+  });
+
   return NextResponse.json({
     currentUser: { id: user.id, role: user.role, display_name: user.display_name },
-    contacts: contacts || [],
+    contacts: contactsWithConversation,
+    // Alias explicite pour le panneau administrateur.
+    ...(isAdmin ? { users: contactsWithConversation } : {}),
     conversations: conversationSummaries,
+    setupWarning: setupWarning || null,
   });
 }
 
@@ -131,7 +196,12 @@ export async function POST(request: Request) {
       .eq("user_b", userB)
       .maybeSingle();
 
-    if (existingError) throw new Error("Impossible de vérifier la conversation.");
+    if (existingError) {
+      return NextResponse.json({
+        error: describeDatabaseError("Impossible de vérifier la conversation", existingError),
+        databaseCode: existingError.code || null,
+      }, { status: 500 });
+    }
     if (existing) return NextResponse.json({ conversation: existing, existing: true });
 
     const { data: created, error: createError } = await messagingSupabase
@@ -148,7 +218,10 @@ export async function POST(request: Request) {
         .eq("user_b", userB)
         .maybeSingle();
       if (raced) return NextResponse.json({ conversation: raced, existing: true });
-      throw new Error("Impossible de créer la conversation.");
+      return NextResponse.json({
+        error: describeDatabaseError("Impossible de créer la conversation", createError),
+        databaseCode: createError.code || null,
+      }, { status: 500 });
     }
 
     return NextResponse.json({ conversation: created, existing: false });
