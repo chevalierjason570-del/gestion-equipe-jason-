@@ -3,6 +3,7 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import { supabase } from "@/lib/supabase";
+import Messenger from "@/app/components/Messenger";
 
 const menu = [
   { id: "accueil", label: "Accueil", icon: "🏠" },
@@ -1791,9 +1792,12 @@ async function uploadFolder() {
     </div>
   </>
 )}
+        {active === "messages" && <Messenger currentUserId={user.id} />}
+
         {active !== "accueil" &&
  active !== "utilisateurs" &&
- active !== "fichiers" && (
+ active !== "fichiers" &&
+ active !== "messages" && (
           <div style={{
             background: "white",
             padding: 30,
