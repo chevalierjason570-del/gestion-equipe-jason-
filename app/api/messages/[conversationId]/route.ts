@@ -126,7 +126,9 @@ export async function POST(request: Request, context: RouteContext) {
     // A member's message triggers an email notification to the admin in this
     // private conversation. Email is best-effort and never rolls back the chat message.
     let emailNotification: "sent" | "not_configured" | "failed" | "not_needed" = "not_needed";
-    if (user.role !== "admin") {
+    const { data: appSettingsRow } = await messagingSupabase.from("app_settings").select("settings").eq("id", "global").maybeSingle();
+    const emailNotificationsEnabled = (appSettingsRow?.settings as any)?.notifications?.newMessages !== false;
+    if (user.role !== "admin" && emailNotificationsEnabled) {
       try {
         const adminUserId = conversation.user_a === user.id
           ? conversation.user_b
