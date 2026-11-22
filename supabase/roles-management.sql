@@ -34,8 +34,10 @@ end $$;
 alter table public.profiles alter column role type text using role::text;
 alter table public.profiles alter column role drop default;
 
--- Le rôle Standard est supprimé. Les anciens profils qui lui étaient affectés
--- restent sans définition de rôle et doivent être réaffectés par un administrateur.
+-- Supprimer définitivement l'ancien rôle Standard.
+-- Les profils concernés sont laissés sans rôle (aucune permission par défaut).
+update public.profiles set role = null where role = 'standard';
+-- Les règles associées sont supprimées automatiquement (ON DELETE CASCADE).
 delete from public.roles where role_key = 'standard';
 
 alter table public.roles enable row level security;
