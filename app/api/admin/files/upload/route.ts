@@ -46,10 +46,10 @@ async function verifyAdmin(request: Request) {
 
   if (profileError || !profile) return null;
   if (profile.role === "admin") return { id: data.user.id, role: "admin", fileRules: [] as any[] };
-  const { data: definition } = await supabase.from("roles").select("permissions").eq("role_key", String(profile.role || "standard")).maybeSingle();
+  const { data: definition } = await supabase.from("roles").select("permissions").eq("role_key", String(profile.role || "")).maybeSingle();
   if (!Array.isArray(definition?.permissions) || !definition.permissions.includes("fichiers_gestion")) return null;
-  const { data: fileRules } = await supabase.from("role_file_rules").select("path, entry_type, access").eq("role_key", String(profile.role || "standard"));
-  return { id: data.user.id, role: String(profile.role || "standard"), fileRules: fileRules || [] };
+  const { data: fileRules } = await supabase.from("role_file_rules").select("path, entry_type, access").eq("role_key", String(profile.role || ""));
+  return { id: data.user.id, role: String(profile.role || ""), fileRules: fileRules || [] };
 }
 
 async function getStoredBytes(s3: ReturnType<typeof getB2Client>): Promise<number> {
