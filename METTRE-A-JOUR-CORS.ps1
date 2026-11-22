@@ -5,8 +5,10 @@ $ErrorActionPreference = "Stop"
   "CORSRules": [
     {
       "AllowedOrigins": [
-        "https://gestion-equipe-jason.vercel.app",
-        "https://gestion-equipe-jason-lavxdqhua-jason-50d3.vercel.app"
+  "https://gestion-equipe-jason.vercel.app",
+  "https://gestion-equipe-jason-lavxdqhua-jason-50d3.vercel.app",
+  "https://gestion-equipe-jason-mc0tw054p-jason-50d3.vercel.app"
+],
       ],
       "AllowedMethods": ["GET", "HEAD", "PUT", "POST", "DELETE"],
       "AllowedHeaders": ["*"],
