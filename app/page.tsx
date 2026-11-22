@@ -1973,6 +1973,9 @@ async function uploadFolder() {
       borderRadius: 12
     }}>
       <h3>📂 Contenu du dossier</h3>
+      <p style={{ color: "#475569", marginTop: 6, marginBottom: 14 }}>
+        {files.filter(item => item.type === "file").length} fichier(s) dans ce dossier
+      </p>
 
       {loadingFiles ? (
         <p>Chargement...</p>
@@ -1992,6 +1995,7 @@ async function uploadFolder() {
                 <th style={{ padding: 12 }}>Nom</th>
                 <th style={{ padding: 12 }}>Type</th>
                 <th style={{ padding: 12 }}>Taille</th>
+                <th style={{ padding: 12 }}>Date et heure</th>
                 <th style={{ padding: 12 }}>Consulter / télécharger</th>
               </tr>
             </thead>
@@ -2022,6 +2026,21 @@ async function uploadFolder() {
                       ? `${(item.size || 0) / 1024 / 1024 < 1
                           ? ((item.size || 0) / 1024).toFixed(1) + " Ko"
                           : ((item.size || 0) / 1024 / 1024).toFixed(2) + " Mo"}`
+                      : "—"}
+                  </td>
+
+                  <td style={{
+                    padding: 12,
+                    borderTop: "1px solid #e2e8f0",
+                    whiteSpace: "nowrap",
+                    color: "#475569",
+                    fontSize: 13
+                  }}>
+                    {item.type === "file" && item.created_at
+                      ? new Date(item.created_at).toLocaleString("fr-FR", {
+                          dateStyle: "short",
+                          timeStyle: "short"
+                        })
                       : "—"}
                   </td>
 
