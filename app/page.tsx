@@ -4,6 +4,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { supabase } from "@/lib/supabase";
 import Messenger from "@/app/components/Messenger";
+import AdminSettings from "@/app/components/AdminSettings";
 
 const menu = [
   { id: "accueil", label: "Accueil", icon: "🏠" },
@@ -300,6 +301,19 @@ export default function Home() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [active, setActive] = useState("accueil");
+  const [appBrandName, setAppBrandName] = useState("Gestion Équipe Jason");
+  const [appAccentColor, setAppAccentColor] = useState("#2563eb");
+
+  useEffect(() => {
+    const applyBrand = (event: Event) => {
+      const detail = (event as CustomEvent<{ appName?: string; accentColor?: string; displayName?: string }>).detail;
+      if (detail?.appName) { setAppBrandName(detail.appName); document.title = detail.appName; }
+      if (detail?.accentColor) setAppAccentColor(detail.accentColor);
+      if (detail?.displayName) setCurrentDisplayName(detail.displayName);
+    };
+    window.addEventListener("gestion-equipe-brand", applyBrand);
+    return () => window.removeEventListener("gestion-equipe-brand", applyBrand);
+  }, []);
 
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
@@ -473,9 +487,19 @@ const [storageUsageBytes, setStorageUsageBytes] = useState(0);
       if (!response.ok) throw new Error(result.error || "Chargement des rôles impossible.");
       const loadedRoles: RoleDefinition[] = result.roles || [];
       setRoles(loadedRoles);
-      setNewRole(current => loadedRoles.some(role => role.role_key === current)
-        ? current
-        : (loadedRoles.find(role => role.role_key !== "admin")?.role_key || "admin"));
+      let configuredDefaultRole = "";
+      try {
+        const settingsResponse = await fetch("/api/admin/settings", { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+        if (settingsResponse.ok) {
+          const settingsResult = await settingsResponse.json();
+          configuredDefaultRole = settingsResult.settings?.accounts?.defaultRole || "";
+        }
+      } catch { /* Le choix manuel reste disponible si les paramètres sont indisponibles. */ }
+      setNewRole(current => configuredDefaultRole && loadedRoles.some(role => role.role_key === configuredDefaultRole)
+        ? configuredDefaultRole
+        : loadedRoles.some(role => role.role_key === current)
+          ? current
+          : (loadedRoles.find(role => role.role_key !== "admin")?.role_key || "admin"));
     } catch (err) {
       setRoleError(err instanceof Error ? err.message : "Erreur de chargement des rôles.");
     } finally { setLoadingRoles(false); }
@@ -1222,7 +1246,7 @@ async function uploadFolder() {
           width: "100%",
           maxWidth: 380
         }}>
-          <h1 style={{ color: "#172554" }}>Gestion Équipe Jason</h1>
+          <h1 style={{ color: "#172554" }}>{appBrandName}</h1>
           <p>Connexion à votre compte</p>
 
           <label>Identifiant</label>
@@ -1275,7 +1299,7 @@ async function uploadFolder() {
         padding: 20,
         boxSizing: "border-box"
       }}>
-        <h2>Gestion Équipe</h2>
+        <h2>{appBrandName}</h2>
         <p style={{ color: "#94a3b8", fontSize: 11 }}>MENU PRINCIPAL</p>
 
         {visibleMenu.map(item => (
@@ -1289,7 +1313,7 @@ async function uploadFolder() {
               marginBottom: 7,
               textAlign: "left",
               color: "white",
-              background: active === item.id ? "#2563eb" : "transparent",
+              background: active === item.id ? appAccentColor : "transparent",
               border: 0,
               borderRadius: 8,
               cursor: "pointer"
@@ -2050,29 +2074,7 @@ async function uploadFolder() {
 )}
         {active === "messages" && <Messenger currentUserId={user.id} />}
 
-        {isAdmin && active === "parametres" && (
-          <div style={{ background: "white", padding: 30, borderRadius: 12 }}>
-            <h2>⚙️ Paramètres</h2>
-            <p style={{ color: "#64748b" }}>Configuration générale de l'application — accès réservé à l'administrateur.</p>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16, marginTop: 22 }}>
-              {[
-                ["👤", "Profil administrateur", "Gérer le nom affiché et les informations du compte administrateur."],
-                ["👥", "Comptes utilisateurs", "Gérer les paramètres généraux des comptes de l'équipe."],
-                ["🛡️", "Sécurité", "Consulter les réglages de sécurité et de connexion."],
-                ["🔔", "Notifications", "Configurer les notifications de l'application."],
-                ["💾", "Stockage", "Consulter les paramètres de stockage des fichiers."],
-                ["🎨", "Apparence", "Personnaliser l'apparence générale de l'application."],
-              ].map(([icon, title, description]) => (
-                <div key={title} style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 18 }}>
-                  <div style={{ fontSize: 24, marginBottom: 8 }}>{icon}</div>
-                  <h3 style={{ margin: "0 0 8px", fontSize: 16 }}>{title}</h3>
-                  <p style={{ margin: 0, color: "#64748b", fontSize: 13, lineHeight: 1.5 }}>{description}</p>
-                  <span style={{ display: "inline-block", marginTop: 12, color: "#64748b", fontSize: 12 }}>Configuration à venir</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+        {isAdmin && active === "parametres" && <AdminSettings />}
 
         {active !== "accueil" &&
  active !== "utilisateurs" &&
