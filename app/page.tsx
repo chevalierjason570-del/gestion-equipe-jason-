@@ -21,6 +21,7 @@ type UserProfile = {
   role: string;
 };
 type RoleDefinition = { id: string; role_key: string; name: string; permissions: string[]; is_system: boolean };
+type RoleFileEntry = { path: string; type: "folder" | "file" };
 const permissionOptions = [
   { id: "accueil", label: "Accueil" },
   { id: "fichiers", label: "Consulter les fichiers" },
@@ -318,6 +319,9 @@ export default function Home() {
   const [roleError, setRoleError] = useState("");
   const [roleSuccess, setRoleSuccess] = useState("");
   const [roleFileRulesText, setRoleFileRulesText] = useState("");
+  const [roleFileEntries, setRoleFileEntries] = useState<RoleFileEntry[]>([]);
+  const [roleFileDenied, setRoleFileDenied] = useState<Record<string, boolean>>({});
+  const [loadingRoleFileEntries, setLoadingRoleFileEntries] = useState(false);
   const [savingRole, setSavingRole] = useState(false);
 // Gestion des fichiers partagés
 type FileEntry = {
@@ -475,6 +479,18 @@ const [storageUsageBytes, setStorageUsageBytes] = useState(0);
 
   useEffect(() => {
     if (user && (active === "roles" || active === "utilisateurs")) loadRoles();
+    if (user && active === "roles") {
+      void (async () => {
+        try {
+          const { data } = await supabase.auth.getSession();
+          const token = data.session?.access_token;
+          if (!token) return;
+          const response = await fetch("/api/admin/files?tree=1", { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+          const result = await response.json();
+          if (response.ok && Array.isArray(result.entries)) setRoleFileEntries(result.entries);
+        } catch { /* La liste sera rechargée lors de l'édition du rôle. */ }
+      })();
+    }
   }, [user, active]);
 
   function startEditRole(role: RoleDefinition) {
@@ -484,6 +500,7 @@ const [storageUsageBytes, setStorageUsageBytes] = useState(0);
     setRolePermissions(role.permissions || []);
     setRoleFileRulesText("");
     setRoleError(""); setRoleSuccess("");
+    setLoadingRoleFileEntries(true);
     void (async () => {
       try {
         const { data } = await supabase.auth.getSession();
@@ -493,7 +510,16 @@ const [storageUsageBytes, setStorageUsageBytes] = useState(0);
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || "Chargement des droits fichiers impossible.");
         setRoleFileRulesText((result.rules || []).map((rule: any) => `${rule.access}|${rule.entry_type}|${rule.path}`).join("\n"));
+        const treeResponse = await fetch("/api/admin/files?tree=1", { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+        const treeResult = await treeResponse.json();
+        if (!treeResponse.ok) throw new Error(treeResult.error || "Chargement de l'arborescence impossible.");
+        const entries: RoleFileEntry[] = Array.isArray(treeResult.entries) ? treeResult.entries : [];
+        setRoleFileEntries(entries);
+        const denied: Record<string, boolean> = {};
+        for (const rule of result.rules || []) if (rule.access === "deny") denied[`${rule.entry_type}:${rule.path}`] = true;
+        setRoleFileDenied(denied);
       } catch (err) { setRoleError(err instanceof Error ? err.message : "Erreur de chargement des droits fichiers."); }
+      finally { setLoadingRoleFileEntries(false); }
     })();
   }
 
@@ -512,10 +538,19 @@ const [storageUsageBytes, setStorageUsageBytes] = useState(0);
       if (!response.ok) throw new Error(result.error || "Enregistrement impossible.");
       const savedRole = result.role;
       if (!savedRole?.role_key) throw new Error("Le rôle a été enregistré, mais sa clé est manquante.");
-      const rules = roleFileRulesText.split(/\r?\n/).map(line => line.trim()).filter(Boolean).map(line => {
-        const [access, entry_type, ...parts] = line.split("|");
-        return { access, entry_type, path: parts.join("|").trim() };
-      });
+      const rules: Array<{access:"deny"|"allow";entry_type:"folder"|"file";path:string}> = [];
+      for (const entry of roleFileEntries) {
+        const key = `${entry.type}:${entry.path}`;
+        if (roleFileDenied[key]) {
+          rules.push({ access: "deny", entry_type: entry.type, path: entry.path });
+          continue;
+        }
+        const parts = entry.path.split("/");
+        const hasDeniedParent = entry.type === "file" && parts.slice(0, -1).some((_, index) =>
+          !!roleFileDenied[`folder:${parts.slice(0, index + 1).join("/")}`]
+        );
+        if (hasDeniedParent) rules.push({ access: "allow", entry_type: "file", path: entry.path });
+      }
       const rulesResponse = await fetch("/api/admin/roles/file-rules", {
         method: "PUT", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ roleKey: savedRole.role_key, rules }),
@@ -523,7 +558,7 @@ const [storageUsageBytes, setStorageUsageBytes] = useState(0);
       const rulesResult = await rulesResponse.json();
       if (!rulesResponse.ok) throw new Error(rulesResult.error || "Le rôle est enregistré, mais ses règles de fichiers ne le sont pas.");
       setRoleSuccess(editingRoleId ? "Rôle modifié avec ses droits fichiers." : "Rôle créé avec ses droits fichiers.");
-      setRoleName(""); setRolePermissions(["accueil"]); setEditingRoleId(""); setRoleFileRulesText("");
+      setRoleName(""); setRolePermissions(["accueil"]); setEditingRoleId(""); setRoleFileRulesText(""); setRoleFileDenied({});
       await loadRoles();
     } catch (err) { setRoleError(err instanceof Error ? err.message : "Erreur d'enregistrement."); }
     finally { setSavingRole(false); }
@@ -1514,9 +1549,21 @@ async function uploadFolder() {
           ))}
           <strong style={{ display: "block", marginTop: 18 }}>Accès aux dossiers et fichiers</strong>
           <p style={{ color: "#64748b", fontSize: 13 }}>Une règle par ligne au format <code>deny|folder|Documents/Confidentiel</code> ou <code>allow|file|Documents/Confidentiel/rapport.pdf</code>. Un refus sur un dossier s'applique à son contenu. Une autorisation explicite sur un fichier constitue une exception.</p>
-          <textarea value={roleFileRulesText} onChange={e => setRoleFileRulesText(e.target.value)} rows={6} placeholder={"deny|folder|RH\nallow|file|RH/Planning.pdf"} style={{ ...inputStyle, minHeight: 130, fontFamily: "monospace", fontSize: 12 }} />
+          <div style={{ border: "1px solid #cbd5e1", borderRadius: 8, padding: 12, maxHeight: 420, overflowY: "auto", marginTop: 8 }}>
+            {loadingRoleFileEntries ? <p>Chargement des dossiers et fichiers...</p> : roleFileEntries.length === 0 ? <p style={{ color: "#64748b" }}>Aucun fichier trouvé dans le stockage.</p> : roleFileEntries.map(entry => {
+              const depth = entry.path.split("/").length - 1;
+              const name = entry.path.split("/").pop() || entry.path;
+              const key = `${entry.type}:${entry.path}`;
+              return <label key={key} style={{ display: "flex", alignItems: "center", gap: 9, padding: "7px 4px", paddingLeft: 8 + depth * 18, borderBottom: "1px solid #f1f5f9", cursor: "pointer" }}>
+                <input type="checkbox" checked={!!roleFileDenied[key]} onChange={e => setRoleFileDenied(current => ({ ...current, [key]: e.target.checked }))} />
+                <span>{entry.type === "folder" ? "📁" : "📄"} {name}</span>
+                <span style={{ marginLeft: "auto", fontSize: 11, color: roleFileDenied[key] ? "#dc2626" : "#15803d" }}>{roleFileDenied[key] ? "Interdit / invisible" : "Autorisé"}</span>
+              </label>;
+            })}
+          </div>
+          <p style={{ color: "#64748b", fontSize: 12 }}>Coché = interdit et invisible. Un dossier interdit masque son contenu. Décoche un fichier pour créer une exception d'accès s'il se trouve dans un dossier interdit.</p>
           <button disabled={savingRole} style={{ width: "100%", padding: 12, marginTop: 12, background: "#2563eb", color: "white", border: 0, borderRadius: 8, cursor: "pointer" }}>{savingRole ? "Enregistrement..." : editingRoleId ? "Enregistrer les modifications" : "Créer le rôle"}</button>
-          {editingRoleId && <button type="button" onClick={() => { setEditingRoleId(""); setRoleName(""); setRolePermissions(["accueil"]); setRoleFileRulesText(""); }} style={{ width: "100%", padding: 10, marginTop: 8, border: "1px solid #cbd5e1", borderRadius: 8, background: "white" }}>Annuler</button>}
+          {editingRoleId && <button type="button" onClick={() => { setEditingRoleId(""); setRoleName(""); setRolePermissions(["accueil"]); setRoleFileRulesText(""); setRoleFileDenied({}); }} style={{ width: "100%", padding: 10, marginTop: 8, border: "1px solid #cbd5e1", borderRadius: 8, background: "white" }}>Annuler</button>}
         </form>
         {roleError && <p style={{ color: "#dc2626" }}>{roleError}</p>}
         {roleSuccess && <p style={{ color: "#15803d" }}>{roleSuccess}</p>}
