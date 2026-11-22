@@ -1580,7 +1580,7 @@ async function uploadFolder() {
               <strong>{role.name}</strong>
               {role.role_key === "admin" ? <span style={{ color: "#64748b", fontSize: 12 }}>Protégé</span> : <div style={{ display: "flex", gap: 6 }}>
                 <button onClick={() => startEditRole(role)} style={{ padding: "6px 9px", border: 0, borderRadius: 6, background: "#dbeafe", color: "#1d4ed8" }}>Modifier</button>
-                {!role.is_system && <button onClick={() => deleteRole(role)} style={{ padding: "6px 9px", border: 0, borderRadius: 6, background: "#fee2e2", color: "#b91c1c" }}>Supprimer</button>}
+                {(!role.is_system || role.role_key === "standard") && <button onClick={() => deleteRole(role)} style={{ padding: "6px 9px", border: 0, borderRadius: 6, background: "#fee2e2", color: "#b91c1c" }}>Supprimer</button>}
               </div>}
             </div>
             <p style={{ color: "#64748b", fontSize: 13, marginBottom: 0 }}>{(role.permissions || []).map(permission => permissionOptions.find(option => option.id === permission)?.label || permission).join(" · ") || "Aucune rubrique"}</p>
