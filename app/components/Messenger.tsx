@@ -93,7 +93,7 @@ export default function Messenger({ currentUserId }: Props) {
   const [recording, setRecording] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [currentRole, setCurrentRole] = useState("standard");
+  const [currentRole, setCurrentRole] = useState("");
   const [attachmentProgress, setAttachmentProgress] = useState("");
   const messageEndRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -127,7 +127,7 @@ export default function Messenger({ currentUserId }: Props) {
     const result = await requestJson("/api/messages");
     setContacts(result.contacts || []);
     setConversations(result.conversations || []);
-    setCurrentRole(result.currentUser?.role || "standard");
+    setCurrentRole(result.currentUser?.role || "");
     return result;
   }, [requestJson]);
 
@@ -137,7 +137,7 @@ export default function Messenger({ currentUserId }: Props) {
       const result = await requestJson(`/api/messages/${encodeURIComponent(conversationId)}`);
       if (selectedConversationRef.current === conversationId) {
         setMessages(result.messages || []);
-        setCurrentRole(result.currentUserRole || "standard");
+        setCurrentRole(result.currentUserRole || "");
       }
     } catch (err) {
       if (!quiet) setError(err instanceof Error ? err.message : "Impossible de charger les messages.");
