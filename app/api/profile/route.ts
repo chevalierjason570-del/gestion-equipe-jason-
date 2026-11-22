@@ -40,7 +40,7 @@ export async function GET(request: Request) {
     );
   }
 
-  const roleKey = String(profile.role || "standard");
+  const roleKey = String(profile.role || "");
   const { data: roleDefinition } = await supabase
     .from("roles")
     .select("permissions")
@@ -50,7 +50,7 @@ export async function GET(request: Request) {
     ? ["accueil", "utilisateurs", "fichiers", "fichiers_gestion", "messages", "roles", "parametres"]
     : Array.isArray(roleDefinition?.permissions)
       ? roleDefinition.permissions.filter((value): value is string => typeof value === "string")
-      : ["accueil", "fichiers", "messages"];
+      : [];
 
   return NextResponse.json(
     {
