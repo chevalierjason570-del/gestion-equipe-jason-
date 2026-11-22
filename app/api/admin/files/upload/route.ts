@@ -45,10 +45,11 @@ async function verifyAdmin(request: Request) {
     .single();
 
   if (profileError || !profile) return null;
-  if (profile.role === "admin") return { id: data.user.id };
+  if (profile.role === "admin") return { id: data.user.id, role: "admin", fileRules: [] as any[] };
   const { data: definition } = await supabase.from("roles").select("permissions").eq("role_key", String(profile.role || "standard")).maybeSingle();
   if (!Array.isArray(definition?.permissions) || !definition.permissions.includes("fichiers_gestion")) return null;
-  return { id: data.user.id };
+  const { data: fileRules } = await supabase.from("role_file_rules").select("path, entry_type, access").eq("role_key", String(profile.role || "standard"));
+  return { id: data.user.id, role: String(profile.role || "standard"), fileRules: fileRules || [] };
 }
 
 async function getStoredBytes(s3: ReturnType<typeof getB2Client>): Promise<number> {
@@ -73,6 +74,13 @@ function jsonError(error: unknown, fallback: string) {
   return NextResponse.json({ error: message }, { status: 400 });
 }
 
+function canUploadPath(user: { role: string; fileRules: Array<{path:string;entry_type:string;access:string}> }, path: string) {
+  if (user.role === "admin") return true;
+  return !user.fileRules.some(rule => rule.access === "deny" &&
+    ((rule.entry_type === "folder" && (path === rule.path || path.startsWith(`${rule.path}/`))) ||
+     (rule.entry_type === "file" && path === rule.path)));
+}
+
 export async function POST(request: Request) {
   const admin = await verifyAdmin(request);
   if (!admin) {
@@ -86,6 +94,10 @@ export async function POST(request: Request) {
     const body = await request.json();
     const action = String(body?.action || "");
     const s3 = getB2Client();
+    const requestedKey = typeof body?.key === "string" ? validateB2Path(body.key) : "";
+    const requestedPrefix = typeof body?.prefix === "string" ? body.prefix : "";
+    if (requestedKey && !canUploadPath(admin, requestedKey)) return NextResponse.json({ error: "Accès interdit à cet emplacement." }, { status: 403 });
+    if (requestedPrefix && !canUploadPath(admin, validateB2Path(requestedPrefix))) return NextResponse.json({ error: "Accès interdit à cet emplacement." }, { status: 403 });
 
     if (action === "listExisting") {
       const requestedPrefix = String(body?.prefix || "");
