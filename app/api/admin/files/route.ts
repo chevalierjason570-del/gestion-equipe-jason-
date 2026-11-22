@@ -144,11 +144,29 @@ async function listFolderEntries(folder: string) {
   } while (continuationToken);
 
   const s3Client = getB2Client();
-  const folderEntries = Array.from(folders).map(name => ({
-    name,
-    path: folder ? `${folder}/${name}` : name,
-    type: "folder" as const,
-  }));
+
+  // Récupérer les objets des sous-dossiers pour calculer leur taille totale
+  // et leur date de dernière activité (y compris les dossiers vides via .folder).
+  const descendantObjects = folders.size > 0 ? await listAllObjects(prefix) : [];
+  const folderEntries = Array.from(folders).map(name => {
+    const folderPath = folder ? `${folder}/${name}` : name;
+    const folderPrefix = `${prefix}${name}/`;
+    const descendants = descendantObjects.filter(object => object.Key.startsWith(folderPrefix));
+    const realFiles = descendants.filter(object => !object.Key.endsWith("/.folder") && object.Key !== `${folderPrefix}.folder`);
+    const dateObjects = realFiles.length > 0 ? realFiles : descendants;
+    const lastModified = dateObjects.reduce<Date | undefined>((latest, object) => {
+      if (!object.LastModified) return latest;
+      return !latest || object.LastModified > latest ? object.LastModified : latest;
+    }, undefined);
+
+    return {
+      name,
+      path: folderPath,
+      type: "folder" as const,
+      size: realFiles.reduce((total, object) => total + object.Size, 0),
+      created_at: lastModified?.toISOString() || null,
+    };
+  });
 
   const fileEntries = await Promise.all(files.map(async file => {
     const name = file.key.slice(prefix.length);
@@ -194,7 +212,9 @@ async function listFolderEntries(folder: string) {
       const dateB = "created_at" in b && b.created_at ? new Date(b.created_at).getTime() : 0;
       return dateB - dateA || a.name.localeCompare(b.name, "fr", { sensitivity: "base" });
     }
-    return a.name.localeCompare(b.name, "fr", { sensitivity: "base" });
+    const dateA = "created_at" in a && a.created_at ? new Date(a.created_at).getTime() : 0;
+    const dateB = "created_at" in b && b.created_at ? new Date(b.created_at).getTime() : 0;
+    return dateB - dateA || a.name.localeCompare(b.name, "fr", { sensitivity: "base" });
   });
 }
 
