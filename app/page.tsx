@@ -406,21 +406,40 @@ const [storageUsageBytes, setStorageUsageBytes] = useState(0);
           setCurrentUserRole(result.role || "");
           setCurrentUserPermissions(Array.isArray(result.permissions) ? result.permissions : ["accueil", "fichiers", "messages"]);
           setCurrentAvatarUrl(typeof result.avatar_url === "string" ? result.avatar_url : "");
+          const metadata = user?.user_metadata || {};
+          const metadataName = [
+            metadata.display_name,
+            metadata.full_name,
+            metadata.name,
+            metadata.username,
+          ].find(value => typeof value === "string" && value.trim());
+
+          // Le nom du profil Supabase est prioritaire. Les métadonnées
+          // servent uniquement de secours si le profil ne fournit aucun nom.
           setCurrentDisplayName(
             typeof result.display_name === "string" && result.display_name.trim()
               ? result.display_name.trim()
               : typeof result.username === "string" && result.username.trim()
                 ? result.username.trim()
-                : "Utilisateur"
+                : typeof metadataName === "string" ? metadataName.trim() : "Utilisateur"
           );
         }
       } catch {
         // En cas d'échec, appliquer le principe du moindre privilège.
         // Ne jamais afficher l'adresse e-mail comme solution de repli.
         if (!cancelled) {
+          const metadata = user?.user_metadata || {};
+          const metadataName = [
+            metadata.display_name,
+            metadata.full_name,
+            metadata.name,
+            metadata.username,
+          ].find(value => typeof value === "string" && value.trim());
           setCurrentUserRole("");
           setCurrentUserPermissions(["accueil"]);
-          setCurrentDisplayName("Utilisateur");
+          setCurrentDisplayName(
+            typeof metadataName === "string" ? metadataName.trim() : "Utilisateur"
+          );
           setCurrentAvatarUrl("");
         }
       }
@@ -1368,7 +1387,18 @@ async function uploadFolder() {
               {(currentDisplayName || "U").trim().charAt(0).toUpperCase()}
             </div>
           )}
-          <strong style={{ color: "white", fontSize: 18, textAlign: "center", overflowWrap: "anywhere" }}>
+          <strong
+            aria-label="Nom affiché du profil"
+            style={{
+              color: "white",
+              fontSize: 18,
+              fontWeight: 700,
+              lineHeight: 1.3,
+              textAlign: "center",
+              overflowWrap: "anywhere",
+              maxWidth: "100%",
+            }}
+          >
             {currentDisplayName || "Utilisateur"}
           </strong>
         </div>
