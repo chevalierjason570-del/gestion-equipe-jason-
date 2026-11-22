@@ -44,7 +44,10 @@ async function verifyAdmin(request: Request) {
     .eq("id", data.user.id)
     .single();
 
-  if (profileError || !profile || profile.role !== "admin") return null;
+  if (profileError || !profile) return null;
+  if (profile.role === "admin") return { id: data.user.id };
+  const { data: definition } = await supabase.from("roles").select("permissions").eq("role_key", String(profile.role || "standard")).maybeSingle();
+  if (!Array.isArray(definition?.permissions) || !definition.permissions.includes("fichiers_gestion")) return null;
   return { id: data.user.id };
 }
 
