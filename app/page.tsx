@@ -317,6 +317,7 @@ export default function Home() {
   const [editingRoleId, setEditingRoleId] = useState("");
   const [roleError, setRoleError] = useState("");
   const [roleSuccess, setRoleSuccess] = useState("");
+  const [roleFileRulesText, setRoleFileRulesText] = useState("");
   const [savingRole, setSavingRole] = useState(false);
 // Gestion des fichiers partagés
 type FileEntry = {
@@ -481,7 +482,19 @@ const [storageUsageBytes, setStorageUsageBytes] = useState(0);
     setEditingRoleId(role.id);
     setRoleName(role.name);
     setRolePermissions(role.permissions || []);
+    setRoleFileRulesText("");
     setRoleError(""); setRoleSuccess("");
+    void (async () => {
+      try {
+        const { data } = await supabase.auth.getSession();
+        const token = data.session?.access_token;
+        if (!token) return;
+        const response = await fetch(`/api/admin/roles/file-rules?roleKey=${encodeURIComponent(role.role_key)}`, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || "Chargement des droits fichiers impossible.");
+        setRoleFileRulesText((result.rules || []).map((rule: any) => `${rule.access}|${rule.entry_type}|${rule.path}`).join("\n"));
+      } catch (err) { setRoleError(err instanceof Error ? err.message : "Erreur de chargement des droits fichiers."); }
+    })();
   }
 
   async function saveRole(e: FormEvent) {
@@ -497,8 +510,20 @@ const [storageUsageBytes, setStorageUsageBytes] = useState(0);
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "Enregistrement impossible.");
-      setRoleSuccess(editingRoleId ? "Rôle modifié." : "Rôle créé.");
-      setRoleName(""); setRolePermissions(["accueil"]); setEditingRoleId("");
+      const savedRole = result.role;
+      if (!savedRole?.role_key) throw new Error("Le rôle a été enregistré, mais sa clé est manquante.");
+      const rules = roleFileRulesText.split(/\r?\n/).map(line => line.trim()).filter(Boolean).map(line => {
+        const [access, entry_type, ...parts] = line.split("|");
+        return { access, entry_type, path: parts.join("|").trim() };
+      });
+      const rulesResponse = await fetch("/api/admin/roles/file-rules", {
+        method: "PUT", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ roleKey: savedRole.role_key, rules }),
+      });
+      const rulesResult = await rulesResponse.json();
+      if (!rulesResponse.ok) throw new Error(rulesResult.error || "Le rôle est enregistré, mais ses règles de fichiers ne le sont pas.");
+      setRoleSuccess(editingRoleId ? "Rôle modifié avec ses droits fichiers." : "Rôle créé avec ses droits fichiers.");
+      setRoleName(""); setRolePermissions(["accueil"]); setEditingRoleId(""); setRoleFileRulesText("");
       await loadRoles();
     } catch (err) { setRoleError(err instanceof Error ? err.message : "Erreur d'enregistrement."); }
     finally { setSavingRole(false); }
@@ -1487,8 +1512,11 @@ async function uploadFolder() {
               {option.label}
             </label>
           ))}
+          <strong style={{ display: "block", marginTop: 18 }}>Accès aux dossiers et fichiers</strong>
+          <p style={{ color: "#64748b", fontSize: 13 }}>Une règle par ligne au format <code>deny|folder|Documents/Confidentiel</code> ou <code>allow|file|Documents/Confidentiel/rapport.pdf</code>. Un refus sur un dossier s'applique à son contenu. Une autorisation explicite sur un fichier constitue une exception.</p>
+          <textarea value={roleFileRulesText} onChange={e => setRoleFileRulesText(e.target.value)} rows={6} placeholder={"deny|folder|RH\nallow|file|RH/Planning.pdf"} style={{ ...inputStyle, minHeight: 130, fontFamily: "monospace", fontSize: 12 }} />
           <button disabled={savingRole} style={{ width: "100%", padding: 12, marginTop: 12, background: "#2563eb", color: "white", border: 0, borderRadius: 8, cursor: "pointer" }}>{savingRole ? "Enregistrement..." : editingRoleId ? "Enregistrer les modifications" : "Créer le rôle"}</button>
-          {editingRoleId && <button type="button" onClick={() => { setEditingRoleId(""); setRoleName(""); setRolePermissions(["accueil"]); }} style={{ width: "100%", padding: 10, marginTop: 8, border: "1px solid #cbd5e1", borderRadius: 8, background: "white" }}>Annuler</button>}
+          {editingRoleId && <button type="button" onClick={() => { setEditingRoleId(""); setRoleName(""); setRolePermissions(["accueil"]); setRoleFileRulesText(""); }} style={{ width: "100%", padding: 10, marginTop: 8, border: "1px solid #cbd5e1", borderRadius: 8, background: "white" }}>Annuler</button>}
         </form>
         {roleError && <p style={{ color: "#dc2626" }}>{roleError}</p>}
         {roleSuccess && <p style={{ color: "#15803d" }}>{roleSuccess}</p>}
