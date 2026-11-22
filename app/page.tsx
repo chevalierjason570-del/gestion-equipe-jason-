@@ -365,6 +365,9 @@ export default function Home() {
   const [saving, setSaving] = useState(false);
   const [userError, setUserError] = useState("");
   const [success, setSuccess] = useState("");
+  const [resetTargetId, setResetTargetId] = useState("");
+  const [resetPassword, setResetPassword] = useState("");
+  const [resettingPassword, setResettingPassword] = useState(false);
 
   const [newUsername, setNewUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -775,6 +778,41 @@ async function deleteUser(item: UserProfile) {
 
   } catch {
     setUserError("Erreur lors de la suppression.");
+  }
+}
+
+async function resetUserPassword(item: UserProfile) {
+  setUserError("");
+  setSuccess("");
+  if (resetPassword.length < 8 || resetPassword.length > 72) {
+    setUserError("Le mot de passe doit contenir entre 8 et 72 caractères.");
+    return;
+  }
+
+  setResettingPassword(true);
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) throw new Error("Session expirée. Reconnecte-toi.");
+
+    const response = await fetch("/api/admin/users/reset-password", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ userId: item.id, password: resetPassword }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "Réinitialisation impossible.");
+
+    setSuccess(result.message || `Mot de passe de ${item.username} réinitialisé.`);
+    setResetPassword("");
+    setResetTargetId("");
+  } catch (err) {
+    setUserError(err instanceof Error ? err.message : "Erreur lors de la réinitialisation.");
+  } finally {
+    setResettingPassword(false);
   }
 }
 
@@ -1677,6 +1715,25 @@ async function uploadFolder() {
   </select>
 
   <button
+    onClick={() => {
+      setUserError("");
+      setSuccess("");
+      setResetPassword("");
+      setResetTargetId(resetTargetId === item.id ? "" : item.id);
+    }}
+    style={{
+      padding: 8,
+      background: "#dbeafe",
+      color: "#1d4ed8",
+      border: 0,
+      borderRadius: 6,
+      cursor: "pointer",
+      marginRight: 8
+    }}
+  >
+    Réinitialiser le mot de passe
+  </button>
+  <button
     onClick={() => deleteUser(item)}
     style={{
       padding: 8,
@@ -1689,6 +1746,37 @@ async function uploadFolder() {
   >
     Supprimer
   </button>
+  {resetTargetId === item.id && (
+    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 10 }}>
+      <input
+        type="password"
+        autoComplete="new-password"
+        aria-label={`Nouveau mot de passe pour ${item.username}`}
+        placeholder="Nouveau mot de passe (8 à 72 caractères)"
+        value={resetPassword}
+        onChange={e => setResetPassword(e.target.value)}
+        minLength={8}
+        maxLength={72}
+        style={{ ...inputStyle, minWidth: 220, width: 260, padding: 8 }}
+      />
+      <button
+        type="button"
+        disabled={resettingPassword || resetPassword.length < 8 || resetPassword.length > 72}
+        onClick={() => void resetUserPassword(item)}
+        style={{ padding: 8, background: "#15803d", color: "white", border: 0, borderRadius: 6, cursor: "pointer", opacity: resettingPassword ? 0.6 : 1 }}
+      >
+        {resettingPassword ? "Enregistrement…" : "Enregistrer"}
+      </button>
+      <button
+        type="button"
+        disabled={resettingPassword}
+        onClick={() => { setResetTargetId(""); setResetPassword(""); }}
+        style={{ padding: 8, background: "#e2e8f0", color: "#334155", border: 0, borderRadius: 6, cursor: "pointer" }}
+      >
+        Annuler
+      </button>
+    </div>
+  )}
 </td>
 
                         </tr>
