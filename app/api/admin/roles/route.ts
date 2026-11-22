@@ -68,10 +68,18 @@ export async function DELETE(request: Request) {
     const { id } = await request.json();
     const { data: role } = await db.from("roles").select("id, role_key, is_system").eq("id", id).maybeSingle();
     if (!role) return NextResponse.json({ error: "Rôle introuvable." }, { status: 404 });
-    if (role.is_system || role.role_key === "admin") return NextResponse.json({ error: "Un rôle système ne peut pas être supprimé." }, { status: 403 });
-    const { count, error: countError } = await db.from("profiles").select("id", { count: "exact", head: true }).eq("role", role.role_key);
-    if (countError) return NextResponse.json({ error: "Impossible de vérifier les utilisateurs affectés." }, { status: 500 });
-    if ((count || 0) > 0) return NextResponse.json({ error: "Ce rôle est encore attribué à un ou plusieurs utilisateurs. Change d'abord leur rôle." }, { status: 409 });
+    if (role.role_key === "admin") return NextResponse.json({ error: "Le rôle Administrateur est protégé." }, { status: 403 });
+    // Standard est un ancien rôle intégré : on peut le supprimer et retirer
+    // son attribution des profils afin qu'il ne réapparaisse plus.
+    if (role.role_key === "standard") {
+      const { error: profileError } = await db.from("profiles").update({ role: null }).eq("role", "standard");
+      if (profileError) return NextResponse.json({ error: "Impossible de retirer l'ancien rôle Standard des utilisateurs." }, { status: 500 });
+    } else {
+      if (role.is_system) return NextResponse.json({ error: "Un rôle système ne peut pas être supprimé." }, { status: 403 });
+      const { count, error: countError } = await db.from("profiles").select("id", { count: "exact", head: true }).eq("role", role.role_key);
+      if (countError) return NextResponse.json({ error: "Impossible de vérifier les utilisateurs affectés." }, { status: 500 });
+      if ((count || 0) > 0) return NextResponse.json({ error: "Ce rôle est encore attribué à un ou plusieurs utilisateurs. Change d'abord leur rôle." }, { status: 409 });
+    }
     const { error } = await db.from("roles").delete().eq("id", id);
     if (error) return NextResponse.json({ error: "Suppression impossible." }, { status: 500 });
     return NextResponse.json({ success: true });
