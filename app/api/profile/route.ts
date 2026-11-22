@@ -56,7 +56,13 @@ export async function GET(request: Request) {
     {
       id: authData.user.id,
       username: profile.username || "",
-      display_name: profile.display_name || profile.username || "Utilisateur",
+      display_name:
+        (typeof profile.display_name === "string" ? profile.display_name.trim() : "") ||
+        (typeof profile.username === "string" ? profile.username.trim() : "") ||
+        (typeof authData.user.user_metadata?.display_name === "string" ? authData.user.user_metadata.display_name.trim() : "") ||
+        (typeof authData.user.user_metadata?.full_name === "string" ? authData.user.user_metadata.full_name.trim() : "") ||
+        (typeof authData.user.user_metadata?.name === "string" ? authData.user.user_metadata.name.trim() : "") ||
+        "Utilisateur",
       role: roleKey,
       avatar_url: profile.avatar_url || "",
       permissions,
