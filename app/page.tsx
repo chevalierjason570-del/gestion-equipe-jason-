@@ -2022,11 +2022,9 @@ async function uploadFolder() {
                     padding: 12,
                     borderTop: "1px solid #e2e8f0"
                   }}>
-                    {item.type === "file"
-                      ? `${(item.size || 0) / 1024 / 1024 < 1
-                          ? ((item.size || 0) / 1024).toFixed(1) + " Ko"
-                          : ((item.size || 0) / 1024 / 1024).toFixed(2) + " Mo"}`
-                      : "—"}
+                    {`${(item.size || 0) / 1024 / 1024 < 1
+                      ? ((item.size || 0) / 1024).toFixed(1) + " Ko"
+                      : ((item.size || 0) / 1024 / 1024).toFixed(2) + " Mo"}`}
                   </td>
 
                   <td style={{
@@ -2036,7 +2034,7 @@ async function uploadFolder() {
                     color: "#475569",
                     fontSize: 13
                   }}>
-                    {item.type === "file" && item.created_at
+                    {item.created_at
                       ? new Date(item.created_at).toLocaleString("fr-FR", {
                           dateStyle: "short",
                           timeStyle: "short"
