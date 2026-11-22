@@ -87,20 +87,28 @@ export async function POST(request: Request) {
   }
 
   try {
-    const { username, display_name, password, role } =
-      await request.json();
-
+    const body = await request.json();
+    const { username, display_name, password } = body;
+    let role = body.role;
+    const { data: settingsRow } = await supabase.from("app_settings").select("settings").eq("id", "global").maybeSingle();
+    const accountSettings = (settingsRow?.settings as any)?.accounts || {};
+    if (accountSettings.allowCreation === false) {
+      return NextResponse.json({ error: "La création de nouveaux comptes est désactivée dans les paramètres." }, { status: 403 });
+    }
+    const minimumPasswordLength = Number.isInteger(accountSettings.minimumPasswordLength)
+      ? Math.min(64, Math.max(8, accountSettings.minimumPasswordLength)) : 8;
+    if (!role) role = accountSettings.defaultRole || "";
     const cleanUsername = String(username || "").trim();
 
     if (
       !cleanUsername ||
       typeof password !== "string" ||
-      password.length < 8
+      password.length < minimumPasswordLength
     ) {
       return NextResponse.json(
         {
           error:
-            "Identifiant obligatoire et mot de passe de 8 caractères minimum.",
+            `Identifiant obligatoire et mot de passe de ${minimumPasswordLength} caractères minimum.`,
         },
         { status: 400 }
       );
