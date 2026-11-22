@@ -33,7 +33,7 @@ export async function authenticateMessagingRequest(request: Request): Promise<Me
     id: authData.user.id,
     username: String(profile.username || ""),
     display_name: String(profile.display_name || profile.username || "Utilisateur"),
-    role: String(profile.role || "standard"),
+    role: String(profile.role || ""),
   };
 }
 
