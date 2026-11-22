@@ -433,7 +433,7 @@ export async function GET(request: Request) {
       for (const object of allObjects) {
         const key = object.Key;
         if (key.endsWith("/.folder")) {
-          const dir = key.slice(0, -7).replace(/\\/$/, "");
+         const dir = key.slice(0, -7).replace(/\/$/, "");
           if (dir) folders.add(dir);
         } else {
           files.push({ path: key, type: "file" });
