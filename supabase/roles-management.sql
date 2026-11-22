@@ -9,11 +9,10 @@ create table if not exists public.roles (
   created_at timestamptz not null default now()
 );
 
--- Les rôles historiques sont conservés et deviennent des rôles système.
+-- Le rôle Administrateur est le seul rôle système intégré.
 insert into public.roles (role_key, name, permissions, is_system)
 values
-  ('admin', 'Administrateur', '["accueil","utilisateurs","fichiers","messages","parametres"]'::jsonb, true),
-  ('standard', 'Standard', '["accueil","fichiers","messages"]'::jsonb, true)
+  ('admin', 'Administrateur', '["accueil","utilisateurs","fichiers","messages","parametres"]'::jsonb, true)
 on conflict (role_key) do update set
   name = excluded.name,
   is_system = true;
@@ -32,9 +31,12 @@ begin
   end loop;
 end $$;
 
-alter table public.profiles alter column role drop default;
 alter table public.profiles alter column role type text using role::text;
-alter table public.profiles alter column role set default 'standard';
+alter table public.profiles alter column role drop default;
+
+-- Le rôle Standard est supprimé. Les anciens profils qui lui étaient affectés
+-- restent sans définition de rôle et doivent être réaffectés par un administrateur.
+delete from public.roles where role_key = 'standard';
 
 alter table public.roles enable row level security;
 revoke all on public.roles from anon, authenticated;
