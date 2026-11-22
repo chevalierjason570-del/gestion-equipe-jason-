@@ -20,6 +20,14 @@ type UserProfile = {
   display_name: string;
   role: string;
 };
+type RoleDefinition = { id: string; role_key: string; name: string; permissions: string[]; is_system: boolean };
+const permissionOptions = [
+  { id: "accueil", label: "Accueil" },
+  { id: "fichiers", label: "Consulter les fichiers" },
+  { id: "fichiers_gestion", label: "Ajouter, modifier et supprimer des fichiers" },
+  { id: "messages", label: "Messagerie" },
+  { id: "parametres", label: "Paramètres" },
+];
 
 const MAX_UPLOAD_BYTES = 10_000_000_000;
 const MAX_STORAGE_BYTES = 10_000_000_000;
@@ -286,6 +294,7 @@ export default function Home() {
   const [password, setPassword] = useState("");
   const [user, setUser] = useState<any>(null);
   const [currentUserRole, setCurrentUserRole] = useState<string>("");
+  const [currentUserPermissions, setCurrentUserPermissions] = useState<string[]>(["accueil", "fichiers", "messages"]);
   const [currentDisplayName, setCurrentDisplayName] = useState<string>("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -301,6 +310,14 @@ export default function Home() {
   const [displayName, setDisplayName] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [newRole, setNewRole] = useState("standard");
+  const [roles, setRoles] = useState<RoleDefinition[]>([]);
+  const [loadingRoles, setLoadingRoles] = useState(false);
+  const [roleName, setRoleName] = useState("");
+  const [rolePermissions, setRolePermissions] = useState<string[]>(["accueil"]);
+  const [editingRoleId, setEditingRoleId] = useState("");
+  const [roleError, setRoleError] = useState("");
+  const [roleSuccess, setRoleSuccess] = useState("");
+  const [savingRole, setSavingRole] = useState(false);
 // Gestion des fichiers partagés
 type FileEntry = {
   name: string;
@@ -311,7 +328,7 @@ type FileEntry = {
   previewUrl?: string | null;
   downloadUrl?: string | null;
 };
-const [fileUserRole, setFileUserRole] = useState("");
+const [fileUserCanManage, setFileUserCanManage] = useState(false);
 const [selectedFolderFiles, setSelectedFolderFiles] = useState<File[]>([]);
 const [files, setFiles] = useState<FileEntry[]>([]);
 const [currentFolder, setCurrentFolder] = useState("");
@@ -343,6 +360,7 @@ const [storageUsageBytes, setStorageUsageBytes] = useState(0);
 
     if (!user?.id) {
       setCurrentUserRole("");
+      setCurrentUserPermissions(["accueil", "fichiers", "messages"]);
       setCurrentDisplayName("");
       return;
     }
@@ -363,7 +381,8 @@ const [storageUsageBytes, setStorageUsageBytes] = useState(0);
         if (!response.ok) throw new Error(result.error || "Rôle introuvable.");
 
         if (!cancelled) {
-          setCurrentUserRole(result.role === "admin" ? "admin" : "standard");
+          setCurrentUserRole(result.role || "standard");
+          setCurrentUserPermissions(Array.isArray(result.permissions) ? result.permissions : ["accueil", "fichiers", "messages"]);
           setCurrentDisplayName(
             typeof result.display_name === "string" && result.display_name.trim()
               ? result.display_name.trim()
@@ -377,6 +396,7 @@ const [storageUsageBytes, setStorageUsageBytes] = useState(0);
         // Ne jamais afficher l'adresse e-mail comme solution de repli.
         if (!cancelled) {
           setCurrentUserRole("standard");
+          setCurrentUserPermissions(["accueil"]);
           setCurrentDisplayName("Utilisateur");
         }
       }
@@ -432,7 +452,70 @@ const [storageUsageBytes, setStorageUsageBytes] = useState(0);
     await supabase.auth.signOut();
     setUser(null);
     setCurrentUserRole("");
+    setCurrentUserPermissions(["accueil"]);
     setActive("accueil");
+  }
+
+  async function loadRoles() {
+    setLoadingRoles(true);
+    setRoleError("");
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) throw new Error("Session expirée. Reconnecte-toi.");
+      const response = await fetch("/api/admin/roles", { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Chargement des rôles impossible.");
+      setRoles(result.roles || []);
+    } catch (err) {
+      setRoleError(err instanceof Error ? err.message : "Erreur de chargement des rôles.");
+    } finally { setLoadingRoles(false); }
+  }
+
+  useEffect(() => {
+    if (user && (active === "roles" || active === "utilisateurs")) loadRoles();
+  }, [user, active]);
+
+  function startEditRole(role: RoleDefinition) {
+    if (role.role_key === "admin") return;
+    setEditingRoleId(role.id);
+    setRoleName(role.name);
+    setRolePermissions(role.permissions || []);
+    setRoleError(""); setRoleSuccess("");
+  }
+
+  async function saveRole(e: FormEvent) {
+    e.preventDefault(); setSavingRole(true); setRoleError(""); setRoleSuccess("");
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) throw new Error("Session expirée. Reconnecte-toi.");
+      const response = await fetch("/api/admin/roles", {
+        method: editingRoleId ? "PATCH" : "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ id: editingRoleId || undefined, name: roleName, permissions: rolePermissions }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Enregistrement impossible.");
+      setRoleSuccess(editingRoleId ? "Rôle modifié." : "Rôle créé.");
+      setRoleName(""); setRolePermissions(["accueil"]); setEditingRoleId("");
+      await loadRoles();
+    } catch (err) { setRoleError(err instanceof Error ? err.message : "Erreur d'enregistrement."); }
+    finally { setSavingRole(false); }
+  }
+
+  async function deleteRole(role: RoleDefinition) {
+    if (!window.confirm(`Supprimer le rôle « ${role.name} » ?`)) return;
+    setRoleError(""); setRoleSuccess("");
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) throw new Error("Session expirée. Reconnecte-toi.");
+      const response = await fetch("/api/admin/roles", { method: "DELETE", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ id: role.id }) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Suppression impossible.");
+      setRoleSuccess("Rôle supprimé."); await loadRoles();
+    } catch (err) { setRoleError(err instanceof Error ? err.message : "Erreur de suppression."); }
   }
 
   async function loadUsers() {
@@ -640,7 +723,7 @@ async function loadFiles() {
     }
 
     setFiles(result.files || []);
-    setFileUserRole(result.role || "standard");
+    setFileUserCanManage(result.role === "admin" || result.permissions?.includes("fichiers_gestion") === true);
     setStorageUsageBytes(Number(result.storage?.usedBytes || 0));
   } catch {
     setFilesError("Erreur de communication avec le serveur.");
@@ -1039,7 +1122,7 @@ async function uploadFolder() {
   const isAdmin = currentUserRole === "admin";
   const visibleMenu = isAdmin
     ? menu
-    : menu.filter(item => item.id !== "utilisateurs" && item.id !== "roles");
+    : menu.filter(item => item.id !== "utilisateurs" && item.id !== "roles" && currentUserPermissions.includes(item.id));
   const current = visibleMenu.find(item => item.id === active) || menu[0];
 
   const inputStyle = {
@@ -1275,8 +1358,7 @@ async function uploadFolder() {
                   onChange={e => setNewRole(e.target.value)}
                   style={inputStyle}
                 >
-                  <option value="standard">Standard</option>
-                  <option value="admin">Administrateur</option>
+                  {roles.map(role => <option key={role.role_key} value={role.role_key}>{role.name}</option>)}
                 </select>
 
                 <button disabled={saving} style={{
@@ -1340,7 +1422,7 @@ async function uploadFolder() {
                           </td>
                          
 <td style={{ padding: 12, borderBottom: "1px solid #e2e8f0" }}>
-  {item.role === "admin" ? "Administrateur" : "Standard"}
+  {roles.find(role => role.role_key === item.role)?.name || item.role}
 </td>
 
 <td style={{
@@ -1348,25 +1430,9 @@ async function uploadFolder() {
   borderBottom: "1px solid #e2e8f0",
   whiteSpace: "nowrap"
 }}>
-  <button
-    onClick={() =>
-      changeRole(
-        item,
-        item.role === "admin" ? "standard" : "admin"
-      )
-    }
-    style={{
-      padding: 8,
-      background: "#2563eb",
-      color: "white",
-      border: 0,
-      borderRadius: 6,
-      cursor: "pointer",
-      marginRight: 8
-    }}
-  >
-    {item.role === "admin" ? "Passer standard" : "Passer admin"}
-  </button>
+  <select value={item.role} onChange={e => changeRole(item, e.target.value)} style={{ padding: 8, border: "1px solid #cbd5e1", borderRadius: 6, marginRight: 8 }}>
+    {roles.map(role => <option key={role.role_key} value={role.role_key}>{role.name}</option>)}
+  </select>
 
   <button
     onClick={() => deleteUser(item)}
@@ -1403,6 +1469,49 @@ async function uploadFolder() {
             </div>
           </>
         )}
+{isAdmin && active === "roles" && (
+  <>
+    <h2>🛡️ Gestion des rôles</h2>
+    <p style={{ color: "#64748b" }}>Crée des rôles personnalisés et choisis les rubriques auxquelles leurs utilisateurs peuvent accéder.</p>
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 20, marginTop: 20 }}>
+      <div style={{ background: "white", padding: 22, borderRadius: 12, border: "1px solid #e2e8f0" }}>
+        <h3>{editingRoleId ? "Modifier le rôle" : "➕ Créer un rôle"}</h3>
+        <form onSubmit={saveRole}>
+          <label>Nom du rôle</label>
+          <input value={roleName} onChange={e => setRoleName(e.target.value)} required maxLength={60} placeholder="Ex. Responsable" style={inputStyle} />
+          <strong>Autorisations</strong>
+          <p style={{ color: "#64748b", fontSize: 13 }}>Choisis les rubriques visibles pour les utilisateurs de ce rôle.</p>
+          {permissionOptions.map(option => (
+            <label key={option.id} style={{ display: "flex", alignItems: "center", gap: 10, margin: "12px 0" }}>
+              <input type="checkbox" checked={rolePermissions.includes(option.id)} onChange={e => setRolePermissions(current => e.target.checked ? [...current, option.id] : current.filter(value => value !== option.id))} />
+              {option.label}
+            </label>
+          ))}
+          <button disabled={savingRole} style={{ width: "100%", padding: 12, marginTop: 12, background: "#2563eb", color: "white", border: 0, borderRadius: 8, cursor: "pointer" }}>{savingRole ? "Enregistrement..." : editingRoleId ? "Enregistrer les modifications" : "Créer le rôle"}</button>
+          {editingRoleId && <button type="button" onClick={() => { setEditingRoleId(""); setRoleName(""); setRolePermissions(["accueil"]); }} style={{ width: "100%", padding: 10, marginTop: 8, border: "1px solid #cbd5e1", borderRadius: 8, background: "white" }}>Annuler</button>}
+        </form>
+        {roleError && <p style={{ color: "#dc2626" }}>{roleError}</p>}
+        {roleSuccess && <p style={{ color: "#15803d" }}>{roleSuccess}</p>}
+      </div>
+      <div style={{ background: "white", padding: 22, borderRadius: 12, border: "1px solid #e2e8f0" }}>
+        <h3>Rôles existants</h3>
+        {loadingRoles ? <p>Chargement...</p> : roles.map(role => (
+          <div key={role.id} style={{ padding: "14px 0", borderBottom: "1px solid #e2e8f0" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+              <strong>{role.name}</strong>
+              {role.role_key === "admin" ? <span style={{ color: "#64748b", fontSize: 12 }}>Protégé</span> : <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={() => startEditRole(role)} style={{ padding: "6px 9px", border: 0, borderRadius: 6, background: "#dbeafe", color: "#1d4ed8" }}>Modifier</button>
+                {!role.is_system && <button onClick={() => deleteRole(role)} style={{ padding: "6px 9px", border: 0, borderRadius: 6, background: "#fee2e2", color: "#b91c1c" }}>Supprimer</button>}
+              </div>}
+            </div>
+            <p style={{ color: "#64748b", fontSize: 13, marginBottom: 0 }}>{(role.permissions || []).map(permission => permissionOptions.find(option => option.id === permission)?.label || permission).join(" · ") || "Aucune rubrique"}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  </>
+)}
+
 {active === "fichiers" && (
   <>
     <h2>📁 Fichiers partagés</h2>
@@ -1455,7 +1564,7 @@ async function uploadFolder() {
       })}
     </div>
 
-    {fileUserRole === "admin" && (<>
+    {fileUserCanManage && (<>
     {/* Création de dossier */}
     <div style={{
       background: "white",
@@ -1615,7 +1724,7 @@ async function uploadFolder() {
       <p style={{ color: "#15803d" }}>{filesSuccess}</p>
     )}
 
-    {fileUserRole === "admin" && uploadProgress !== null && (
+    {fileUserCanManage && uploadProgress !== null && (
       <div style={{ margin: "12px 0", maxWidth: 520 }}>
         <div
           role="progressbar"
@@ -1780,7 +1889,7 @@ async function uploadFolder() {
                       </a>
                     )}
 
-                    {fileUserRole === "admin" && (<>
+                    {fileUserCanManage && (<>
                     <button
                       onClick={() => renameEntry(item)}
                       disabled={fileActionLoading}
