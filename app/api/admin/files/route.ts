@@ -45,7 +45,7 @@ async function verifyUser(request: Request, submittedToken?: string) {
     .single();
   if (profileError || !profile) return null;
 
-  const role = String(profile.role || "standard");
+  const role = String(profile.role || "");
   const { data: definition } = await supabase.from("roles").select("permissions").eq("role_key", role).maybeSingle();
   const permissions = role === "admin" ? ["fichiers", "fichiers_gestion"] : Array.isArray(definition?.permissions) ? definition.permissions : [];
   const { data: fileRules } = role === "admin"
