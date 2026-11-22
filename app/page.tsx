@@ -412,7 +412,7 @@ const [storageUsageBytes, setStorageUsageBytes] = useState(0);
 
   useEffect(() => {
     if (currentUserRole && currentUserRole !== "admin" &&
-        (active === "utilisateurs" || active === "roles")) {
+        (active === "utilisateurs" || active === "roles" || active === "parametres")) {
       setActive("accueil");
     }
   }, [currentUserRole, active]);
@@ -1186,7 +1186,12 @@ async function uploadFolder() {
   const isAdmin = currentUserRole === "admin";
   const visibleMenu = isAdmin
     ? menu
-    : menu.filter(item => item.id !== "utilisateurs" && item.id !== "roles" && currentUserPermissions.includes(item.id));
+    : menu.filter(item =>
+        item.id !== "utilisateurs" &&
+        item.id !== "roles" &&
+        item.id !== "parametres" &&
+        currentUserPermissions.includes(item.id)
+      );
   const current = visibleMenu.find(item => item.id === active) || menu[0];
 
   const inputStyle = {
@@ -1580,7 +1585,7 @@ async function uploadFolder() {
               <strong>{role.name}</strong>
               {role.role_key === "admin" ? <span style={{ color: "#64748b", fontSize: 12 }}>Protégé</span> : <div style={{ display: "flex", gap: 6 }}>
                 <button onClick={() => startEditRole(role)} style={{ padding: "6px 9px", border: 0, borderRadius: 6, background: "#dbeafe", color: "#1d4ed8" }}>Modifier</button>
-                {(!role.is_system || role.role_key === "standard") && <button onClick={() => deleteRole(role)} style={{ padding: "6px 9px", border: 0, borderRadius: 6, background: "#fee2e2", color: "#b91c1c" }}>Supprimer</button>}
+                {!role.is_system && <button onClick={() => deleteRole(role)} style={{ padding: "6px 9px", border: 0, borderRadius: 6, background: "#fee2e2", color: "#b91c1c" }}>Supprimer</button>}
               </div>}
             </div>
             <p style={{ color: "#64748b", fontSize: 13, marginBottom: 0 }}>{(role.permissions || []).map(permission => permissionOptions.find(option => option.id === permission)?.label || permission).join(" · ") || "Aucune rubrique"}</p>
@@ -2045,11 +2050,36 @@ async function uploadFolder() {
 )}
         {active === "messages" && <Messenger currentUserId={user.id} />}
 
+        {isAdmin && active === "parametres" && (
+          <div style={{ background: "white", padding: 30, borderRadius: 12 }}>
+            <h2>⚙️ Paramètres</h2>
+            <p style={{ color: "#64748b" }}>Configuration générale de l'application — accès réservé à l'administrateur.</p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16, marginTop: 22 }}>
+              {[
+                ["👤", "Profil administrateur", "Gérer le nom affiché et les informations du compte administrateur."],
+                ["👥", "Comptes utilisateurs", "Gérer les paramètres généraux des comptes de l'équipe."],
+                ["🛡️", "Sécurité", "Consulter les réglages de sécurité et de connexion."],
+                ["🔔", "Notifications", "Configurer les notifications de l'application."],
+                ["💾", "Stockage", "Consulter les paramètres de stockage des fichiers."],
+                ["🎨", "Apparence", "Personnaliser l'apparence générale de l'application."],
+              ].map(([icon, title, description]) => (
+                <div key={title} style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 18 }}>
+                  <div style={{ fontSize: 24, marginBottom: 8 }}>{icon}</div>
+                  <h3 style={{ margin: "0 0 8px", fontSize: 16 }}>{title}</h3>
+                  <p style={{ margin: 0, color: "#64748b", fontSize: 13, lineHeight: 1.5 }}>{description}</p>
+                  <span style={{ display: "inline-block", marginTop: 12, color: "#64748b", fontSize: 12 }}>Configuration à venir</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {active !== "accueil" &&
  active !== "utilisateurs" &&
  active !== "roles" &&
  active !== "fichiers" &&
- active !== "messages" && (
+ active !== "messages" &&
+ active !== "parametres" && (
           <div style={{
             background: "white",
             padding: 30,
