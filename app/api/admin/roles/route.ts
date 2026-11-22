@@ -68,7 +68,7 @@ export async function DELETE(request: Request) {
     const { id } = await request.json();
     const { data: role } = await db.from("roles").select("id, role_key, is_system").eq("id", id).maybeSingle();
     if (!role) return NextResponse.json({ error: "Rôle introuvable." }, { status: 404 });
-    if (role.is_system || ["admin", "standard"].includes(role.role_key)) return NextResponse.json({ error: "Un rôle système ne peut pas être supprimé." }, { status: 403 });
+    if (role.is_system || role.role_key === "admin") return NextResponse.json({ error: "Un rôle système ne peut pas être supprimé." }, { status: 403 });
     const { count, error: countError } = await db.from("profiles").select("id", { count: "exact", head: true }).eq("role", role.role_key);
     if (countError) return NextResponse.json({ error: "Impossible de vérifier les utilisateurs affectés." }, { status: 500 });
     if ((count || 0) > 0) return NextResponse.json({ error: "Ce rôle est encore attribué à un ou plusieurs utilisateurs. Change d'abord leur rôle." }, { status: 409 });
