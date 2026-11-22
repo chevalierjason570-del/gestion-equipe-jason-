@@ -52,11 +52,20 @@ export async function GET(request: Request) {
       ? roleDefinition.permissions.filter((value): value is string => typeof value === "string")
       : [];
 
+  // Le compte actuellement nommé « Louis » est affiché sous le nom « Afichier ».
+  // Cette règle ne modifie pas le compte administrateur ni les autres utilisateurs.
+  const isLouisAccount = [profile.username, profile.display_name].some(
+    value => typeof value === "string" && value.trim().toLocaleLowerCase("fr") === "louis"
+  );
+  const accountDisplayName = isLouisAccount
+    ? "Afichier"
+    : profile.display_name || profile.username || "Utilisateur";
+
   return NextResponse.json(
     {
       id: authData.user.id,
       username: profile.username || "",
-      display_name: profile.display_name || profile.username || "Utilisateur",
+      display_name: accountDisplayName,
       role: roleKey,
       permissions,
     },
