@@ -48,11 +48,34 @@ async function verifyUser(request: Request, submittedToken?: string) {
   const role = String(profile.role || "standard");
   const { data: definition } = await supabase.from("roles").select("permissions").eq("role_key", role).maybeSingle();
   const permissions = role === "admin" ? ["fichiers", "fichiers_gestion"] : Array.isArray(definition?.permissions) ? definition.permissions : [];
-  return { id: data.user.id, role, permissions: permissions as string[] };
+  const { data: fileRules } = role === "admin"
+    ? { data: [] as any[] }
+    : await supabase.from("role_file_rules").select("path, entry_type, access").eq("role_key", role);
+  return { id: data.user.id, role, permissions: permissions as string[], fileRules: fileRules || [] };
 }
 
 function safeFolderPath(value: string, allowEmpty = false) {
   return validateB2Path(value, allowEmpty);
+}
+
+function canAccessPath(user: { role: string; fileRules: Array<{path:string;entry_type:string;access:string}> }, path: string, type: "file" | "folder") {
+  if (user.role === "admin") return true;
+  const rules = user.fileRules || [];
+  // A deny on any ancestor folder applies recursively.
+  const deniedByFolder = rules.some(rule =>
+    rule.access === "deny" && rule.entry_type === "folder" &&
+    (path === rule.path || path.startsWith(`${rule.path}/`))
+  );
+  if (!deniedByFolder) {
+    const exact = rules.find(rule => rule.path === path && rule.entry_type === type);
+    return exact?.access !== "deny";
+  }
+  // Only an explicit allow on this exact file can override an ancestor-folder deny.
+  if (type === "file") return rules.some(rule =>
+    rule.path === path && rule.entry_type === "file" && rule.access === "allow"
+  );
+  // Keep a denied parent navigable only when it contains an explicitly allowed file.
+  return rules.some(rule => rule.entry_type === "file" && rule.access === "allow" && rule.path.startsWith(`${path}/`));
 }
 
 async function listAllObjects(prefix: string) {
@@ -138,7 +161,7 @@ async function listFolderEntries(folder: string) {
           Key: file.key,
           ResponseContentDisposition: `inline; filename*=UTF-8''${dispositionName}`,
         }),
-        { expiresIn: 3600 }
+        { expiresIn: 60 }
       ),
       getSignedUrl(
         s3Client,
@@ -147,7 +170,7 @@ async function listFolderEntries(folder: string) {
           Key: file.key,
           ResponseContentDisposition: `attachment; filename*=UTF-8''${dispositionName}`,
         }),
-        { expiresIn: 3600 }
+        { expiresIn: 60 }
       ),
     ]);
 
@@ -316,7 +339,7 @@ async function copyEntry(sourcePath: string, targetPath: string, type: "file" | 
   return { moved: targets.length };
 }
 
-async function createFolderZipResponse(folderPath: string): Promise<Response> {
+async function createFolderZipResponse(folderPath: string, user?: { role: string; fileRules: Array<{path:string;entry_type:string;access:string}> }): Promise<Response> {
   const s3 = getB2Client();
   const prefix = `${folderPath}/`;
   const objects = await listAllObjects(prefix);
@@ -396,15 +419,33 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     if (searchParams.has("downloadFolder")) {
       const folderPath = safeFolderPath(searchParams.get("downloadFolder") || "");
-      return await createFolderZipResponse(folderPath);
+      return await createFolderZipResponse(folderPath, user);
     }
 
     const folder = safeFolderPath(searchParams.get("folder") || "", true);
-    const [files, usedBytes] = await Promise.all([
-      listFolderEntries(folder),
-      getTotalStorageBytes(),
-    ]);
-
+    if (user.role !== "admin" && !canAccessPath(user, folder, "folder")) {
+      return NextResponse.json({ error: "Accès interdit à ce dossier." }, { status: 403 });
+    }
+    const [allObjects, usedBytes] = await Promise.all([listAllObjects(""), getTotalStorageBytes()]);
+    if (searchParams.get("tree") === "1") {
+      const folders = new Set<string>();
+      const files: Array<{path:string;type:"file"|"folder"}> = [];
+      for (const object of allObjects) {
+        const key = object.Key;
+        if (key.endsWith("/.folder")) {
+          const dir = key.slice(0, -7).replace(/\\/$/, "");
+          if (dir) folders.add(dir);
+        } else {
+          files.push({ path: key, type: "file" });
+        }
+        const parts = key.split("/");
+        for (let i = 1; i < parts.length - (key.endsWith("/.folder") ? 2 : 1); i++) folders.add(parts.slice(0, i).join("/"));
+      }
+      for (const path of folders) files.push({ path, type: "folder" });
+      return NextResponse.json({ entries: files.sort((a,b)=>a.path.localeCompare(b.path,"fr")), role:user.role }, { headers: { "Cache-Control": "no-store" } });
+    }
+    let files = await listFolderEntries(folder);
+    if (user.role !== "admin") files = files.filter(item => canAccessPath(user, item.path, item.type));
     return NextResponse.json({
       files,
       role: user.role,
@@ -446,7 +487,7 @@ export async function POST(request: Request) {
       if (!folder) {
         return NextResponse.json({ error: "Dossier à télécharger invalide." }, { status: 400 });
       }
-      return await createFolderZipResponse(folder);
+      return await createFolderZipResponse(folder, user);
     }
 
     if (user.role !== "admin" && !user.permissions.includes("fichiers_gestion")) {
@@ -463,6 +504,7 @@ export async function POST(request: Request) {
     }
     const safeName = validateB2Segment(name);
     const path = folder ? `${folder}/${safeName}` : safeName;
+    if (!canAccessPath(user, folder, "folder")) return NextResponse.json({ error: "Accès interdit à ce dossier." }, { status: 403 });
     const s3 = getB2Client();
 
     if (await entryExists(path, "folder")) {
@@ -498,6 +540,7 @@ export async function DELETE(request: Request) {
     if (type !== "file" && type !== "folder") {
       return NextResponse.json({ error: "Type d'élément invalide." }, { status: 400 });
     }
+    if (!canAccessPath(user, path, type)) return NextResponse.json({ error: "Accès interdit à cet élément." }, { status: 403 });
 
     const objects = type === "folder"
       ? await listAllObjects(`${path}/`)
@@ -531,6 +574,7 @@ export async function PATCH(request: Request) {
     if (type !== "file" && type !== "folder") {
       return NextResponse.json({ error: "Type d'élément invalide." }, { status: 400 });
     }
+    if (!canAccessPath(user, path, type)) return NextResponse.json({ error: "Accès interdit à cet élément." }, { status: 403 });
 
     let targetPath: string;
     if (action === "rename") {
@@ -547,6 +591,7 @@ export async function PATCH(request: Request) {
       return NextResponse.json({ error: "Action inconnue. Utilise rename ou move." }, { status: 400 });
     }
 
+    if (!canAccessPath(user, targetPath, type)) return NextResponse.json({ error: "Accès interdit à l'emplacement de destination." }, { status: 403 });
     if (targetPath === path) return NextResponse.json({ success: true, unchanged: true });
     if (type === "folder" && targetPath.startsWith(`${path}/`)) {
       return NextResponse.json({ error: "Tu ne peux pas déplacer un dossier à l'intérieur de lui-même." }, { status: 400 });
