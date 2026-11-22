@@ -84,7 +84,19 @@ export async function POST(request: Request) {
       );
     }
 
-    if (!["admin", "standard"].includes(role)) {
+    const cleanRole = String(role || "").trim();
+    if (!cleanRole) {
+      return NextResponse.json(
+        { error: "Un rôle valide doit être sélectionné." },
+        { status: 400 }
+      );
+    }
+    const { data: roleDefinition } = await supabase
+      .from("roles")
+      .select("role_key")
+      .eq("role_key", cleanRole)
+      .maybeSingle();
+    if (!roleDefinition) {
       return NextResponse.json(
         { error: "Rôle invalide." },
         { status: 400 }
