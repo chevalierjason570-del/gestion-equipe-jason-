@@ -106,11 +106,13 @@ export async function POST(request: Request) {
       );
     }
 
-    if (!["admin", "standard"].includes(role)) {
-      return NextResponse.json(
-        { error: "Rôle invalide." },
-        { status: 400 }
-      );
+    const { data: selectedRole } = await supabase
+      .from("roles")
+      .select("role_key")
+      .eq("role_key", role)
+      .maybeSingle();
+    if (!selectedRole) {
+      return NextResponse.json({ error: "Rôle invalide. Choisis un rôle existant." }, { status: 400 });
     }
 
     const { data: existing } = await supabase
@@ -197,12 +199,11 @@ export async function PATCH(request: Request) {
   try {
     const { id, role } = await request.json();
 
-    if (!id || !["admin", "standard"].includes(role)) {
-      return NextResponse.json(
-        { error: "Informations invalides." },
-        { status: 400 }
-      );
+    if (!id || typeof role !== "string") {
+      return NextResponse.json({ error: "Informations invalides." }, { status: 400 });
     }
+    const { data: selectedRole } = await supabase.from("roles").select("role_key").eq("role_key", role).maybeSingle();
+    if (!selectedRole) return NextResponse.json({ error: "Ce rôle n'existe pas." }, { status: 400 });
 
     const { data: target, error: targetError } = await supabase
       .from("profiles")
@@ -215,6 +216,9 @@ export async function PATCH(request: Request) {
         { error: "Utilisateur introuvable." },
         { status: 404 }
       );
+    }
+    if (id === admin.id && role !== "admin") {
+      return NextResponse.json({ error: "Tu ne peux pas retirer toi-même tes droits administrateur." }, { status: 403 });
     }
 
     // Empêcher la rétrogradation du dernier administrateur
