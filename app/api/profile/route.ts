@@ -40,12 +40,25 @@ export async function GET(request: Request) {
     );
   }
 
+  const roleKey = String(profile.role || "standard");
+  const { data: roleDefinition } = await supabase
+    .from("roles")
+    .select("permissions")
+    .eq("role_key", roleKey)
+    .maybeSingle();
+  const permissions = roleKey === "admin"
+    ? ["accueil", "utilisateurs", "fichiers", "fichiers_gestion", "messages", "roles", "parametres"]
+    : Array.isArray(roleDefinition?.permissions)
+      ? roleDefinition.permissions.filter((value): value is string => typeof value === "string")
+      : ["accueil", "fichiers", "messages"];
+
   return NextResponse.json(
     {
       id: authData.user.id,
       username: profile.username || "",
       display_name: profile.display_name || profile.username || "Utilisateur",
-      role: profile.role === "admin" ? "admin" : "standard",
+      role: roleKey,
+      permissions,
     },
     { headers: { "Cache-Control": "no-store" } }
   );
