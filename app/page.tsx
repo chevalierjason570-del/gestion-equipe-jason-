@@ -1208,6 +1208,12 @@ async function uploadFolder() {
 }
 
   const isAdmin = currentUserRole === "admin";
+  const profilePhotoUrl =
+    typeof user?.user_metadata?.avatar_url === "string" && user.user_metadata.avatar_url.trim()
+      ? user.user_metadata.avatar_url.trim()
+      : typeof user?.user_metadata?.picture === "string" && user.user_metadata.picture.trim()
+        ? user.user_metadata.picture.trim()
+        : "";
   const visibleMenu = isAdmin
     ? menu
     : menu.filter(item =>
@@ -1299,7 +1305,50 @@ async function uploadFolder() {
         padding: 20,
         boxSizing: "border-box"
       }}>
-        <h2>{appBrandName}</h2>
+        <div style={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: 9,
+          marginBottom: 24,
+          paddingTop: 8
+        }}>
+          {profilePhotoUrl ? (
+            <img
+              src={profilePhotoUrl}
+              alt={`Photo de profil de ${currentDisplayName || "l'utilisateur"}`}
+              style={{
+                width: 88,
+                height: 88,
+                borderRadius: "50%",
+                objectFit: "cover",
+                border: "3px solid rgba(255,255,255,0.85)"
+              }}
+            />
+          ) : (
+            <div
+              aria-label="Photo de profil non définie"
+              style={{
+                width: 88,
+                height: 88,
+                borderRadius: "50%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                background: "#dbeafe",
+                color: "#1e40af",
+                border: "3px solid rgba(255,255,255,0.85)",
+                fontSize: 36,
+                fontWeight: 700
+              }}
+            >
+              {(currentDisplayName || "U").trim().charAt(0).toUpperCase()}
+            </div>
+          )}
+          <strong style={{ color: "white", fontSize: 18, textAlign: "center", overflowWrap: "anywhere" }}>
+            {currentDisplayName || "Utilisateur"}
+          </strong>
+        </div>
         <p style={{ color: "#94a3b8", fontSize: 11 }}>MENU PRINCIPAL</p>
 
         {visibleMenu.map(item => (
