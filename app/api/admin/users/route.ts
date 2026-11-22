@@ -62,7 +62,7 @@ export async function GET(request: Request) {
 
   const { data, error } = await supabase
     .from("profiles")
-    .select("id, username, display_name, role")
+    .select("id, username, display_name, role, avatar_url")
     .order("display_name");
 
   if (error) {
@@ -347,5 +347,26 @@ export async function DELETE(request: Request) {
       { error: "Erreur lors de la suppression du compte." },
       { status: 500 }
     );
+  }
+}
+
+
+// Modifier la photo d'un compte : réservé strictement à l'administrateur.
+export async function PATCH(request: Request) {
+  const admin = await verifyAdmin(request);
+  if (!admin) return NextResponse.json({ error: "Accès administrateur refusé." }, { status: 403 });
+  try {
+    const body = await request.json();
+    const userId = typeof body?.userId === "string" ? body.userId : "";
+    const avatarUrl = typeof body?.avatarUrl === "string" ? body.avatarUrl : "";
+    if (!userId) return NextResponse.json({ error: "Compte utilisateur manquant." }, { status: 400 });
+    if (avatarUrl && (!avatarUrl.startsWith("data:image/") || avatarUrl.length > 2_800_000)) {
+      return NextResponse.json({ error: "Image invalide ou trop volumineuse (maximum 2 Mo)." }, { status: 400 });
+    }
+    const { error } = await supabase.from("profiles").update({ avatar_url: avatarUrl || null }).eq("id", userId);
+    if (error) throw error;
+    return NextResponse.json({ success: true, avatar_url: avatarUrl });
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Impossible d'enregistrer la photo." }, { status: 500 });
   }
 }
