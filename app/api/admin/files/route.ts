@@ -185,8 +185,15 @@ async function listFolderEntries(folder: string) {
     };
   }));
 
-  return [...folderEntries, ...fileEntries].sort((a, b) => {
-    if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
+  // Afficher les fichiers les plus récemment modifiés en premier.
+  // Les dossiers restent regroupés après les fichiers.
+  return [...fileEntries, ...folderEntries].sort((a, b) => {
+    if (a.type !== b.type) return a.type === "file" ? -1 : 1;
+    if (a.type === "file" && b.type === "file") {
+      const dateA = "created_at" in a && a.created_at ? new Date(a.created_at).getTime() : 0;
+      const dateB = "created_at" in b && b.created_at ? new Date(b.created_at).getTime() : 0;
+      return dateB - dateA || a.name.localeCompare(b.name, "fr", { sensitivity: "base" });
+    }
     return a.name.localeCompare(b.name, "fr", { sensitivity: "base" });
   });
 }
