@@ -310,7 +310,7 @@ export default function Home() {
   const [newUsername, setNewUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [newPassword, setNewPassword] = useState("");
-  const [newRole, setNewRole] = useState("standard");
+  const [newRole, setNewRole] = useState("");
   const [roles, setRoles] = useState<RoleDefinition[]>([]);
   const [loadingRoles, setLoadingRoles] = useState(false);
   const [roleName, setRoleName] = useState("");
@@ -358,8 +358,8 @@ const [storageUsageBytes, setStorageUsageBytes] = useState(0);
     return () => listener.subscription.unsubscribe();
   }, []);
 
-  // Le rôle est vérifié côté serveur : les comptes standard ne reçoivent
-  // jamais les rubriques d'administration dans leur menu.
+  // Le rôle est vérifié côté serveur : seuls les droits du rôle attribué
+  // déterminent les rubriques visibles dans le menu.
   useEffect(() => {
     let cancelled = false;
 
@@ -386,7 +386,7 @@ const [storageUsageBytes, setStorageUsageBytes] = useState(0);
         if (!response.ok) throw new Error(result.error || "Rôle introuvable.");
 
         if (!cancelled) {
-          setCurrentUserRole(result.role || "standard");
+          setCurrentUserRole(result.role || "");
           setCurrentUserPermissions(Array.isArray(result.permissions) ? result.permissions : ["accueil", "fichiers", "messages"]);
           setCurrentDisplayName(
             typeof result.display_name === "string" && result.display_name.trim()
@@ -400,7 +400,7 @@ const [storageUsageBytes, setStorageUsageBytes] = useState(0);
         // En cas d'échec, appliquer le principe du moindre privilège.
         // Ne jamais afficher l'adresse e-mail comme solution de repli.
         if (!cancelled) {
-          setCurrentUserRole("standard");
+          setCurrentUserRole("");
           setCurrentUserPermissions(["accueil"]);
           setCurrentDisplayName("Utilisateur");
         }
@@ -471,7 +471,11 @@ const [storageUsageBytes, setStorageUsageBytes] = useState(0);
       const response = await fetch("/api/admin/roles", { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "Chargement des rôles impossible.");
-      setRoles(result.roles || []);
+      const loadedRoles: RoleDefinition[] = result.roles || [];
+      setRoles(loadedRoles);
+      setNewRole(current => loadedRoles.some(role => role.role_key === current)
+        ? current
+        : (loadedRoles.find(role => role.role_key !== "admin")?.role_key || "admin"));
     } catch (err) {
       setRoleError(err instanceof Error ? err.message : "Erreur de chargement des rôles.");
     } finally { setLoadingRoles(false); }
@@ -742,7 +746,7 @@ async function createUser(e: FormEvent) {
     setNewUsername("");
     setDisplayName("");
     setNewPassword("");
-    setNewRole("standard");
+    setNewRole(roles.find(role => role.role_key !== "admin")?.role_key || "admin");
 
     await loadUsers();
 
