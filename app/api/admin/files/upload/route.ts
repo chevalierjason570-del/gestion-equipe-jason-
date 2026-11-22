@@ -130,6 +130,21 @@ export async function POST(request: Request) {
       });
     }
 
+    // Renvoie une URL pré-signée neuve pour réessayer un PUT simple.
+    // La route reste protégée par verifyAdmin et la validation du chemin ci-dessus.
+    if (action === "signSingle") {
+      const key = validateB2Path(String(body?.key || ""));
+      const contentType = typeof body?.contentType === "string"
+        ? body.contentType.slice(0, 200)
+        : "application/octet-stream";
+      const url = await getSignedUrl(
+        s3,
+        new PutObjectCommand({ Bucket: B2_BUCKET, Key: key, ContentType: contentType }),
+        { expiresIn: 900 }
+      );
+      return NextResponse.json({ url });
+    }
+
     if (action === "init") {
       const key = validateB2Path(String(body?.key || ""));
       const size = Number(body?.size);
