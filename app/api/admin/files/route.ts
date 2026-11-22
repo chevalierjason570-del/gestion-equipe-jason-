@@ -45,7 +45,10 @@ async function verifyUser(request: Request, submittedToken?: string) {
     .single();
   if (profileError || !profile) return null;
 
-  return { id: data.user.id, role: String(profile.role || "standard") };
+  const role = String(profile.role || "standard");
+  const { data: definition } = await supabase.from("roles").select("permissions").eq("role_key", role).maybeSingle();
+  const permissions = role === "admin" ? ["fichiers", "fichiers_gestion"] : Array.isArray(definition?.permissions) ? definition.permissions : [];
+  return { id: data.user.id, role, permissions: permissions as string[] };
 }
 
 function safeFolderPath(value: string, allowEmpty = false) {
@@ -385,6 +388,9 @@ export async function GET(request: Request) {
   if (!user) {
     return NextResponse.json({ error: "Connexion obligatoire." }, { status: 401 });
   }
+  if (user.role !== "admin" && !user.permissions.includes("fichiers")) {
+    return NextResponse.json({ error: "Tu n'as pas accès aux fichiers partagés." }, { status: 403 });
+  }
 
   try {
     const { searchParams } = new URL(request.url);
@@ -402,6 +408,7 @@ export async function GET(request: Request) {
     return NextResponse.json({
       files,
       role: user.role,
+      permissions: user.permissions,
       storage: {
         usedBytes,
         limitBytes: B2_MAX_STORAGE_BYTES,
@@ -433,14 +440,17 @@ export async function POST(request: Request) {
     const folder = safeFolderPath(rawFolder, true);
 
     if (action === "download_folder") {
+      if (user.role !== "admin" && !user.permissions.includes("fichiers")) {
+        return NextResponse.json({ error: "Tu n'as pas accès aux fichiers partagés." }, { status: 403 });
+      }
       if (!folder) {
         return NextResponse.json({ error: "Dossier à télécharger invalide." }, { status: 400 });
       }
       return await createFolderZipResponse(folder);
     }
 
-    if (user.role !== "admin") {
-      return NextResponse.json({ error: "Seuls les administrateurs peuvent créer des dossiers." }, { status: 403 });
+    if (user.role !== "admin" && !user.permissions.includes("fichiers_gestion")) {
+      return NextResponse.json({ error: "Tu n'as pas l'autorisation de gérer les fichiers." }, { status: 403 });
     }
 
     if (action !== "create_folder") {
@@ -477,8 +487,8 @@ export async function POST(request: Request) {
 export async function DELETE(request: Request) {
   const user = await verifyUser(request);
   if (!user) return NextResponse.json({ error: "Connexion obligatoire." }, { status: 401 });
-  if (user.role !== "admin") {
-    return NextResponse.json({ error: "Seuls les administrateurs peuvent supprimer des fichiers." }, { status: 403 });
+  if (user.role !== "admin" && !user.permissions.includes("fichiers_gestion")) {
+    return NextResponse.json({ error: "Tu n'as pas l'autorisation de gérer les fichiers." }, { status: 403 });
   }
 
   try {
@@ -509,8 +519,8 @@ export async function DELETE(request: Request) {
 export async function PATCH(request: Request) {
   const user = await verifyUser(request);
   if (!user) return NextResponse.json({ error: "Connexion obligatoire." }, { status: 401 });
-  if (user.role !== "admin") {
-    return NextResponse.json({ error: "Seuls les administrateurs peuvent organiser les fichiers." }, { status: 403 });
+  if (user.role !== "admin" && !user.permissions.includes("fichiers_gestion")) {
+    return NextResponse.json({ error: "Tu n'as pas l'autorisation de gérer les fichiers." }, { status: 403 });
   }
 
   try {
