@@ -20,6 +20,7 @@ type UserProfile = {
   username: string;
   display_name: string;
   role: string;
+  avatar_url?: string | null;
 };
 type RoleDefinition = { id: string; role_key: string; name: string; permissions: string[]; is_system: boolean };
 type RoleFileEntry = { path: string; type: "folder" | "file" };
@@ -298,6 +299,7 @@ export default function Home() {
   const [currentUserRole, setCurrentUserRole] = useState<string>("");
   const [currentUserPermissions, setCurrentUserPermissions] = useState<string[]>(["accueil", "fichiers", "messages"]);
   const [currentDisplayName, setCurrentDisplayName] = useState<string>("");
+  const [currentAvatarUrl, setCurrentAvatarUrl] = useState<string>("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [active, setActive] = useState("accueil");
@@ -381,6 +383,7 @@ const [storageUsageBytes, setStorageUsageBytes] = useState(0);
       setCurrentUserRole("");
       setCurrentUserPermissions(["accueil", "fichiers", "messages"]);
       setCurrentDisplayName("");
+      setCurrentAvatarUrl("");
       return;
     }
 
@@ -402,6 +405,7 @@ const [storageUsageBytes, setStorageUsageBytes] = useState(0);
         if (!cancelled) {
           setCurrentUserRole(result.role || "");
           setCurrentUserPermissions(Array.isArray(result.permissions) ? result.permissions : ["accueil", "fichiers", "messages"]);
+          setCurrentAvatarUrl(typeof result.avatar_url === "string" ? result.avatar_url : "");
           setCurrentDisplayName(
             typeof result.display_name === "string" && result.display_name.trim()
               ? result.display_name.trim()
@@ -417,6 +421,7 @@ const [storageUsageBytes, setStorageUsageBytes] = useState(0);
           setCurrentUserRole("");
           setCurrentUserPermissions(["accueil"]);
           setCurrentDisplayName("Utilisateur");
+          setCurrentAvatarUrl("");
         }
       }
     })();
@@ -645,6 +650,29 @@ const [storageUsageBytes, setStorageUsageBytes] = useState(0);
   }, [user, active]);
 
  
+async function updateUserPhoto(item: UserProfile, file: File | undefined) {
+  if (!file) return;
+  if (!file.type.startsWith("image/")) { setUserError("Choisis un fichier image."); return; }
+  if (file.size > 2 * 1024 * 1024) { setUserError("La photo doit faire 2 Mo maximum."); return; }
+  try {
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Lecture de l'image impossible."));
+      reader.onerror = () => reject(new Error("Lecture de l'image impossible."));
+      reader.readAsDataURL(file);
+    });
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) throw new Error("Session expirée. Reconnecte-toi.");
+    const response = await fetch("/api/admin/users", { method: "PATCH", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ userId: item.id, avatarUrl: dataUrl }) });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "Enregistrement impossible.");
+    setUsers(previous => previous.map(userItem => userItem.id === item.id ? { ...userItem, avatar_url: dataUrl } : userItem));
+    setSuccess(`Photo de ${item.display_name} mise à jour.`);
+    if (item.id === user?.id) setCurrentAvatarUrl(dataUrl);
+  } catch (error) { setUserError(error instanceof Error ? error.message : "Erreur lors de l'enregistrement."); }
+}
+
 async function deleteUser(item: UserProfile) {
   const confirmed = window.confirm(
     `Voulez-vous vraiment supprimer le compte ${item.username} ?`
@@ -1208,12 +1236,7 @@ async function uploadFolder() {
 }
 
   const isAdmin = currentUserRole === "admin";
-  const profilePhotoUrl =
-    typeof user?.user_metadata?.avatar_url === "string" && user.user_metadata.avatar_url.trim()
-      ? user.user_metadata.avatar_url.trim()
-      : typeof user?.user_metadata?.picture === "string" && user.user_metadata.picture.trim()
-        ? user.user_metadata.picture.trim()
-        : "";
+  const profilePhotoUrl = currentAvatarUrl || (typeof user?.user_metadata?.avatar_url === "string" ? user.user_metadata.avatar_url : typeof user?.user_metadata?.picture === "string" ? user.user_metadata.picture : "");
   const visibleMenu = isAdmin
     ? menu
     : menu.filter(item =>
@@ -1545,7 +1568,7 @@ async function uploadFolder() {
                   }}>
                     <thead>
                       <tr>
-                        {["Identifiant", "Nom affiché", "Rôle", "Actions"].map(title => (
+                        {["Photo", "Identifiant", "Nom affiché", "Rôle", "Actions"].map(title => (
                           <th key={title} style={{
                             padding: 12,
                             borderBottom: "1px solid #e2e8f0"
@@ -1556,6 +1579,10 @@ async function uploadFolder() {
                     <tbody>
                       {users.map(item => (
                         <tr key={item.id}>
+                          <td style={{ padding: 12, borderBottom: "1px solid #e2e8f0" }}>
+                            {item.avatar_url ? <img src={item.avatar_url} alt={`Photo de ${item.display_name}`} style={{ width: 42, height: 42, borderRadius: "50%", objectFit: "cover" }} /> : <span style={{ display: "inline-flex", width: 42, height: 42, borderRadius: "50%", alignItems: "center", justifyContent: "center", background: "#dbeafe", color: "#1e40af", fontWeight: 700 }}>{(item.display_name || "U").charAt(0).toUpperCase()}</span>}
+                            <div><label style={{ fontSize: 12, cursor: "pointer", color: "#2563eb" }}>Modifier la photo<input type="file" accept="image/*" style={{ display: "none" }} onChange={e => { void updateUserPhoto(item, e.target.files?.[0]); e.currentTarget.value = ""; }} /></label></div>
+                          </td>
                           <td style={{ padding: 12, borderBottom: "1px solid #e2e8f0" }}>
                             {item.username}
                           </td>
