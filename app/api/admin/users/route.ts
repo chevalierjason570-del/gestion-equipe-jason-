@@ -205,8 +205,26 @@ export async function PATCH(request: Request) {
   }
 
   try {
-    const { id, role } = await request.json();
+    const body = await request.json();
 
+    // Action photo de profil (administrateur uniquement)
+    if (typeof body?.userId === "string") {
+      const userId = body.userId;
+      const avatarUrl = typeof body.avatarUrl === "string" ? body.avatarUrl : "";
+      if (!userId) return NextResponse.json({ error: "Compte utilisateur manquant." }, { status: 400 });
+      if (avatarUrl && (!avatarUrl.startsWith("data:image/") || avatarUrl.length > 2_800_000)) {
+        return NextResponse.json({ error: "Image invalide ou trop volumineuse (maximum 2 Mo)." }, { status: 400 });
+      }
+      const { error } = await supabase
+        .from("profiles")
+        .update({ avatar_url: avatarUrl || null })
+        .eq("id", userId);
+      if (error) throw error;
+      return NextResponse.json({ success: true, avatar_url: avatarUrl });
+    }
+
+    // Action modification du rôle
+    const { id, role } = body;
     if (!id || typeof role !== "string") {
       return NextResponse.json({ error: "Informations invalides." }, { status: 400 });
     }
@@ -350,23 +368,3 @@ export async function DELETE(request: Request) {
   }
 }
 
-
-// Modifier la photo d'un compte : réservé strictement à l'administrateur.
-export async function PATCH(request: Request) {
-  const admin = await verifyAdmin(request);
-  if (!admin) return NextResponse.json({ error: "Accès administrateur refusé." }, { status: 403 });
-  try {
-    const body = await request.json();
-    const userId = typeof body?.userId === "string" ? body.userId : "";
-    const avatarUrl = typeof body?.avatarUrl === "string" ? body.avatarUrl : "";
-    if (!userId) return NextResponse.json({ error: "Compte utilisateur manquant." }, { status: 400 });
-    if (avatarUrl && (!avatarUrl.startsWith("data:image/") || avatarUrl.length > 2_800_000)) {
-      return NextResponse.json({ error: "Image invalide ou trop volumineuse (maximum 2 Mo)." }, { status: 400 });
-    }
-    const { error } = await supabase.from("profiles").update({ avatar_url: avatarUrl || null }).eq("id", userId);
-    if (error) throw error;
-    return NextResponse.json({ success: true, avatar_url: avatarUrl });
-  } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Impossible d'enregistrer la photo." }, { status: 500 });
-  }
-}
