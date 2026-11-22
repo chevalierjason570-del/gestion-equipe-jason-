@@ -195,14 +195,57 @@ async function uploadFileToB2(
     if (init.mode !== "single" || !init.url) {
       throw new Error("B2 n'a pas pu préparer le téléversement direct.");
     }
-    const response = await fetch(init.url, {
-      method: "PUT",
-      headers: { "Content-Type": contentType },
-      body: file,
-    });
-    if (!response.ok) throw new Error(`B2 a refusé le fichier (HTTP ${response.status}).`);
-    onProgress(file.size);
-    return;
+    // Un PUT simple est idempotent pour la même clé et le même fichier.
+    // En cas d'erreur transitoire, on redemande une URL fraîche puis on réessaie.
+    const maxAttempts = 6;
+    let activeUrl = init.url as string;
+    let lastError = "Erreur réseau inconnue.";
+    let lastRequestId = "";
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      let response: Response | null = null;
+      try {
+        response = await fetch(activeUrl, {
+          method: "PUT",
+          headers: { "Content-Type": contentType },
+          body: file,
+        });
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : "Erreur réseau.";
+      }
+
+      if (response?.ok) {
+        onProgress(file.size);
+        return;
+      }
+
+      if (response) {
+        const responseText = await response.text().catch(() => "");
+        lastError = `HTTP ${response.status}${responseText ? ` : ${responseText.slice(0, 300)}` : ""}`;
+        lastRequestId = response.headers.get("x-amz-request-id") || response.headers.get("x-bz-request-id") || "";
+        if (![408, 429, 500, 502, 503, 504].includes(response.status)) {
+          throw new Error(`B2 a refusé le fichier « ${file.name} » (${lastError}).`);
+        }
+      }
+
+      if (attempt === maxAttempts - 1) break;
+      const delay = Math.min(30_000, 2_000 * (2 ** attempt));
+      await sleep(delay);
+
+      try {
+        const refreshed = await b2UploadApi(accessToken, {
+          action: "signSingle", key: objectKey, contentType,
+        });
+        if (!refreshed.url) throw new Error("B2 n'a pas fourni de nouvelle URL.");
+        activeUrl = refreshed.url;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Erreur de renouvellement de l'URL.";
+        lastError = `${lastError} ; renouvellement URL : ${message}`;
+      }
+    }
+
+    const requestInfo = lastRequestId ? ` ; request ID ${lastRequestId}` : "";
+    throw new Error(`Échec de l'envoi de « ${file.name} » après ${maxAttempts} tentatives (${lastError}${requestInfo}). Relance le dossier pour reprendre les fichiers déjà envoyés.`);
   }
 
   let state: { key: string; uploadId: string; partSize: number } | null = null;
