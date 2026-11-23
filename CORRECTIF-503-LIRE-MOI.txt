@@ -1,0 +1,10 @@
+CORRECTIF BACKBLAZE 503
+
+1. Dans GitHub, remplace uniquement app/page.tsx par celui de cette archive.
+2. Fais Commit changes et attends le déploiement Vercel.
+3. Dans PowerShell, exécute METTRE-A-JOUR-CORS.ps1 pour exposer Retry-After (le bucket reste privé).
+4. Reprends le même fichier dans le même navigateur pour utiliser l'uploadId et les parties confirmées conservés localement.
+
+Cette correction renouvelle l'URL signée à chaque tentative et augmente les délais d'attente. Un HTTP 503 reste une réponse du service B2 : si elle persiste après les tentatives, il faut communiquer le request ID au support Backblaze.
+
+Ne partage jamais les URL complètes contenant X-Amz-Signature et uploadId. Ne supprime pas les fichiers déjà terminés dans B2 ou les originaux Supabase.

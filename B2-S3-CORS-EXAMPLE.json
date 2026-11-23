@@ -1,0 +1,25 @@
+{
+  "CORSRules": [
+    {
+      "AllowedOrigins": [
+        "https://REMPLACER-PAR-LE-DOMAINE-VERCEL-EXACT",
+        "http://localhost:3000"
+      ],
+      "AllowedMethods": [
+        "GET",
+        "HEAD",
+        "PUT"
+      ],
+      "AllowedHeaders": [
+        "*"
+      ],
+      "ExposeHeaders": [
+        "ETag",
+        "Retry-After",
+        "x-amz-request-id",
+        "x-amz-id-2"
+      ],
+      "MaxAgeSeconds": 3600
+    }
+  ]
+}

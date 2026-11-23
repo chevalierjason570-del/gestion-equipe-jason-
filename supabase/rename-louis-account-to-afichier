@@ -1,0 +1,7 @@
+-- Renomme le compte utilisateur « Louis » en « Afichier » dans le profil Supabase.
+-- À exécuter une seule fois dans l’éditeur SQL de Supabase si tu veux aussi
+-- enregistrer ce changement directement dans la base de données.
+UPDATE public.profiles
+SET display_name = 'Afichier'
+WHERE lower(trim(coalesce(display_name, ''))) = 'louis'
+   OR lower(trim(coalesce(username, ''))) = 'louis';
