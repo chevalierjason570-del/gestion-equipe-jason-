@@ -1,6 +1,6 @@
 import { S3Client } from "@aws-sdk/client-s3";
 
-export const B2_BUCKET = process.env.B2_BUCKET_NAME || "gestion-equipe-jason-b2-10go";
+export const B2_BUCKET = process.env.B2_BUCKET_NAME || "gestion-equipe";
 export const B2_MAX_STORAGE_BYTES = 10_000_000_000; // 10 GB décimaux, plafond de l'application
 export const B2_MAX_FILE_BYTES = 10_000_000_000;
 export const B2_MULTIPART_PART_SIZE = 32 * 1024 * 1024; // 32 MiB
