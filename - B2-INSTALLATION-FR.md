@@ -4,15 +4,15 @@ Important : quota et coûts
 Backblaze indique que les premiers 10 Go de stockage sont gratuits. Le quota est partagé sur le compte, et les opérations/transferts suivent aussi les conditions tarifaires Backblaze. Le site bloque les nouveaux envois au-delà de 10 000 000 000 octets dans ce bucket, mais ne peut pas empêcher d'autres usages du compte ni garantir l'absence de frais liés aux opérations. Fais vérifier le compte et les éventuelles facturations par le responsable adulte du compte.
 Le plafond par fichier dans ce projet est également de 10 000 000 000 octets. Les transferts multipart servent aux gros fichiers.
 1. Bucket déjà créé
-Le bucket de ton compte est `gestion-equipe`, en accès Private. L'endpoint montré dans ta capture est `s3.eu-central-003.backblazeb2.com`, donc la région est `eu-central-003`.
+Le bucket de ton compte est `gestion-equipe-jason-b2-10go`, en accès Private. L'endpoint montré dans ta capture est `s3.eu-central-003.backblazeb2.com`, donc la région est `eu-central-003`.
 Garde le bucket privé et ne change pas son nom.
 2. Application Key déjà créée
 Utilise une Application Key standard (pas la Master Application Key), limitée à ce bucket, avec lecture/écriture des fichiers et `Allow List All Bucket Names` activé. Le code nécessite les capacités de liste, lecture, écriture et suppression des fichiers. Ne partage jamais la valeur `applicationKey` secrète et ne l'ajoute jamais au code ou à GitHub.
 3. Lifecycle : éviter de garder des anciennes versions
-La capture du bucket indiquait `Keep all versions`. Pour un espace limité à 10 Go, ouvre Buckets → gestion-equipe → Lifecycle Settings et choisis Keep only the last version, puis enregistre. Backblaze conserve l'ancienne version cachée environ un jour avant de la supprimer. L'espace peut donc ne pas être libéré immédiatement après suppression/remplacement.
+La capture du bucket indiquait `Keep all versions`. Pour un espace limité à 10 Go, ouvre Buckets → gestion-equipe-jason-b2-10go → Lifecycle Settings et choisis Keep only the last version, puis enregistre. Backblaze conserve l'ancienne version cachée environ un jour avant de la supprimer. L'espace peut donc ne pas être libéré immédiatement après suppression/remplacement.
 4. CORS obligatoire pour les envois navigateur
 Les envois utilisent des URL S3 signées directement depuis le navigateur. Le bucket doit autoriser le domaine exact du site Vercel pour `PUT`, `GET`, `HEAD`, autoriser les en-têtes de requête et exposer `ETag`. Le bucket reste privé : CORS ne rend pas les objets publics.
-Un modèle est fourni dans `B2-CORS-RULES-EXAMPLE.json`. Remplace `https://REMPLACER-PAR-LE-DOMAINE-VERCEL-EXACT` par l'origine exacte du site (sans chemin, par exemple `https://mon-site.vercel.app`). Ajoute `http://localhost:3000` uniquement pour le développement local.
+Un modèle est fourni dans `B2-S3-CORS-EXAMPLE.json`. Remplace `https://REMPLACER-PAR-LE-DOMAINE-VERCEL-EXACT` par l'origine exacte du site (sans chemin, par exemple `https://mon-site.vercel.app`). Ajoute `http://localhost:3000` uniquement pour le développement local.
 La configuration CORS du bucket est une opération de gestion du bucket. Une Application Key limitée à un bucket ne peut pas modifier ces réglages. Fais appliquer le CORS par le propriétaire/administrateur Backblaze via l'interface disponible pour son compte ou le CLI/API officiel avec des droits de gestion de bucket. Ne crée pas une clé générale d'accès à tous les buckets pour contourner cela. La documentation Backblaze décrit CORS et ses permissions dans les liens ci-dessous.
 5. Variables Vercel
 Dans Vercel → projet → Settings → Environment Variables, conserve les trois variables Supabase déjà présentes et ajoute les cinq variables B2 suivantes pour Production (et Preview/Development si nécessaire) :
@@ -21,7 +21,7 @@ B2_REGION=eu-central-003
 B2_ENDPOINT=https://s3.eu-central-003.backblazeb2.com
 B2_ACCESS_KEY_ID=TON_APPLICATION_KEY_ID
 B2_SECRET_ACCESS_KEY=TON_APPLICATION_KEY_SECRET
-B2_BUCKET_NAME=gestion-equipe
+B2_BUCKET_NAME=gestion-equipe-jason-b2-10go
 ```
 `B2_ACCESS_KEY_ID` reçoit le `keyID` affiché par Backblaze. `B2_SECRET_ACCESS_KEY` reçoit la valeur `applicationKey` affichée une seule fois.
 Les variables Supabase restent nécessaires :
@@ -29,7 +29,7 @@ Les variables Supabase restent nécessaires :
 `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
 `SUPABASE_SERVICE_ROLE_KEY`
 Ne mets jamais `SUPABASE_SERVICE_ROLE_KEY` ou les clés B2 sous un nom qui commence par `NEXT_PUBLIC_`.
-Pour le développement local, copie `.env.local.example` en `.env.local` et complète les vraies valeurs. Ne mets jamais `.env.local` sur GitHub.
+`.env.local` est uniquement utile pour le développement local. Pour la production hébergée sur Vercel, configure les variables dans Vercel → Settings → Environment Variables. Ne mets jamais de vraies clés dans GitHub ni dans `.env.local.example`.
 6. Migration des fichiers Supabase déjà présents
 Le script `npm run migrate:b2` copie les objets du bucket Supabase `fichiers-equipe` vers le bucket B2. Il ne supprime jamais les originaux. Il ignore les chemins déjà copiés, donc il peut être relancé après une interruption.
 Sur le PC, installe Node.js 22 si nécessaire, ouvre un terminal dans le dossier du projet, puis lance :
