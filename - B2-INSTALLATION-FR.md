@@ -10,7 +10,7 @@ Le plafond par fichier dans ce projet est également de 10 000 000 000 octets. L
 
 ## 1. Bucket déjà créé
 
-Le bucket de ton compte est `gestion-equipe-jason-b2-10go`, en accès **Private**. L'endpoint montré dans ta capture est `s3.eu-central-003.backblazeb2.com`, donc la région est `eu-central-003`.
+Le bucket de ton compte est `gestion-equipe`, en accès **Private**. L'endpoint montré dans ta capture est `s3.eu-central-003.backblazeb2.com`, donc la région est `eu-central-003`.
 
 Garde le bucket privé et ne change pas son nom.
 
