@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { unzipSync, strFromU8 } from "fflate";
+import { supabase } from "@/lib/supabase";
 
-type Props = { url: string; fileName: string; onClose: () => void };
+type Props = { path: string; fileName: string; onClose: () => void };
 type Block = { type: "p" | "h" | "table" | "list"; text?: string; level?: number; rows?: string[][]; items?: string[] };
 
 function nodeText(node: Element): string {
@@ -45,15 +46,27 @@ function parseOdt(xml: string): Block[] {
   return blocks;
 }
 
-export default function OdtPreview({ url, fileName, onClose }: Props) {
+export default function OdtPreview({ path, fileName, onClose }: Props) {
   const [blocks, setBlocks] = useState<Block[] | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const response = await fetch(url);
-        if (!response.ok) throw new Error(`Impossible de récupérer le document (${response.status}).`);
+        const { data: sessionData } = await supabase.auth.getSession();
+        const accessToken = sessionData.session?.access_token;
+        if (!accessToken) throw new Error("Ta session a expiré. Reconnecte-toi puis réessaie.");
+
+        // L'API du site sert le fichier : pas de dépendance au CORS B2
+        // ni aux URL pré-signées qui expirent.
+        const response = await fetch(`/api/admin/files?preview=${encodeURIComponent(path)}`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+          cache: "no-store",
+        });
+        if (!response.ok) {
+          const data = await response.json().catch(() => null);
+          throw new Error(data?.error || `Impossible de récupérer le document (${response.status}).`);
+        }
         const buffer = new Uint8Array(await response.arrayBuffer());
         const archive = unzipSync(buffer);
         const content = archive["content.xml"];
@@ -65,7 +78,7 @@ export default function OdtPreview({ url, fileName, onClose }: Props) {
       }
     })();
     return () => { cancelled = true; };
-  }, [url]);
+  }, [path]);
 
   return <div role="dialog" aria-modal="true" aria-label={`Aperçu de ${fileName}`} onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(15,23,42,.65)", display: "flex", alignItems: "center", justifyContent: "center", padding: 18 }}>
     <div style={{ width: "min(100%, 1000px)", height: "min(92vh, 900px)", background: "#e9edf3", borderRadius: 14, overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,.3)" }}>
