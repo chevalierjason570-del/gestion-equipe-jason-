@@ -391,6 +391,11 @@ export default function Home() {
   const [roleFileDenied, setRoleFileDenied] = useState<Record<string, boolean>>({});
   const [loadingRoleFileEntries, setLoadingRoleFileEntries] = useState(false);
   const [savingRole, setSavingRole] = useState(false);
+  const [messagingRole, setMessagingRole] = useState<RoleDefinition | null>(null);
+  const [messagingRoleUsers, setMessagingRoleUsers] = useState<UserProfile[]>([]);
+  const [messagingAllowedIds, setMessagingAllowedIds] = useState<string[]>([]);
+  const [loadingMessagingRules, setLoadingMessagingRules] = useState(false);
+  const [savingMessagingRules, setSavingMessagingRules] = useState(false);
 // Gestion des fichiers partagés
 type FileEntry = {
   name: string;
@@ -627,6 +632,36 @@ const [showFileTools, setShowFileTools] = useState(false);
       } catch (err) { setRoleError(err instanceof Error ? err.message : "Erreur de chargement des droits fichiers."); }
       finally { setLoadingRoleFileEntries(false); }
     })();
+  }
+
+  async function openRoleMessaging(role: RoleDefinition) {
+    setMessagingRole(role); setLoadingMessagingRules(true); setRoleError("");
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) throw new Error("Session expirée. Reconnecte-toi.");
+      const response = await fetch(`/api/admin/roles/messaging-users?roleKey=${encodeURIComponent(role.role_key)}`, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Chargement des autorisations impossible.");
+      setMessagingRoleUsers(result.users || []); setMessagingAllowedIds(result.allowedUserIds || []);
+    } catch (err) { setRoleError(err instanceof Error ? err.message : "Erreur de chargement."); setMessagingRole(null); }
+    finally { setLoadingMessagingRules(false); }
+  }
+
+  async function saveRoleMessaging() {
+    if (!messagingRole) return;
+    setSavingMessagingRules(true); setRoleError("");
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) throw new Error("Session expirée. Reconnecte-toi.");
+      const response = await fetch("/api/admin/roles/messaging-users", { method: "PUT", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ roleKey: messagingRole.role_key, userIds: messagingAllowedIds }) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Enregistrement impossible.");
+      setRoleSuccess(`Autorisations de messagerie enregistrées pour « ${messagingRole.name} » (${result.count} utilisateur(s)).`);
+      setMessagingRole(null);
+    } catch (err) { setRoleError(err instanceof Error ? err.message : "Erreur d'enregistrement."); }
+    finally { setSavingMessagingRules(false); }
   }
 
   async function saveRole(e: FormEvent) {
@@ -1791,16 +1826,33 @@ async function uploadFolder() {
           <div key={role.id} style={{ padding: "14px 0", borderBottom: "1px solid #e2e8f0" }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
               <strong>{role.name}</strong>
-              {role.role_key === "admin" ? <span style={{ color: "#64748b", fontSize: 12 }}>Protégé</span> : <div style={{ display: "flex", gap: 6 }}>
-                <button onClick={() => startEditRole(role)} style={{ padding: "6px 9px", border: 0, borderRadius: 6, background: "#dbeafe", color: "#1d4ed8" }}>Modifier</button>
-                {!role.is_system && <button onClick={() => deleteRole(role)} style={{ padding: "6px 9px", border: 0, borderRadius: 6, background: "#fee2e2", color: "#b91c1c" }}>Supprimer</button>}
-              </div>}
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                <button onClick={() => openRoleMessaging(role)} style={{ padding: "6px 9px", border: 0, borderRadius: 6, background: "#dcfce7", color: "#166534", cursor: "pointer" }}>💬 Messagerie</button>
+                {role.role_key === "admin" ? <span style={{ color: "#64748b", fontSize: 12, alignSelf: "center" }}>Protégé</span> : <>
+                  <button onClick={() => startEditRole(role)} style={{ padding: "6px 9px", border: 0, borderRadius: 6, background: "#dbeafe", color: "#1d4ed8", cursor: "pointer" }}>Modifier</button>
+                  {!role.is_system && <button onClick={() => deleteRole(role)} style={{ padding: "6px 9px", border: 0, borderRadius: 6, background: "#fee2e2", color: "#b91c1c", cursor: "pointer" }}>Supprimer</button>}
+                </>}
+              </div>
             </div>
             <p style={{ color: "#64748b", fontSize: 13, marginBottom: 0 }}>{(role.permissions || []).map(permission => permissionOptions.find(option => option.id === permission)?.label || permission).join(" · ") || "Aucune rubrique"}</p>
           </div>
         ))}
       </div>
     </div>
+    {messagingRole && <div role="dialog" aria-modal="true" style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(15,23,42,.55)", display: "grid", placeItems: "center", padding: 18 }}>
+      <div style={{ width: "min(560px, 100%)", maxHeight: "85vh", overflow: "auto", background: "white", borderRadius: 14, padding: 22, boxShadow: "0 20px 60px rgba(0,0,0,.25)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}><h3 style={{ margin: 0 }}>💬 Messagerie — {messagingRole.name}</h3><button onClick={() => setMessagingRole(null)} aria-label="Fermer" style={{ border: 0, background: "#f1f5f9", borderRadius: 8, padding: "7px 11px", cursor: "pointer" }}>✕</button></div>
+        <p style={{ color: "#64748b", fontSize: 13 }}>Coche les utilisateurs avec lesquels les membres de ce rôle peuvent échanger des messages. La règle s'applique dans les deux sens.</p>
+        {loadingMessagingRules ? <p>Chargement des utilisateurs…</p> : <>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10, fontSize: 13 }}><strong>{messagingAllowedIds.length} autorisé(s)</strong><button type="button" onClick={() => setMessagingAllowedIds(messagingRoleUsers.map(person => person.id))} style={{ border: 0, background: "transparent", color: "#2563eb", cursor: "pointer" }}>Tout cocher</button><button type="button" onClick={() => setMessagingAllowedIds([])} style={{ border: 0, background: "transparent", color: "#dc2626", cursor: "pointer" }}>Tout décocher</button></div>
+          <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, maxHeight: 360, overflow: "auto", padding: "4px 12px" }}>
+            {messagingRoleUsers.map(person => <label key={person.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 2px", borderBottom: "1px solid #f1f5f9", cursor: "pointer" }}><input type="checkbox" checked={messagingAllowedIds.includes(person.id)} onChange={event => setMessagingAllowedIds(current => event.target.checked ? [...current, person.id] : current.filter(id => id !== person.id))} /><span><strong>{person.display_name || person.username}</strong><small style={{ display: "block", color: "#64748b" }}>@{person.username} · {person.role}</small></span></label>)}
+            {!messagingRoleUsers.length && <p style={{ color: "#64748b" }}>Aucun utilisateur disponible.</p>}
+          </div>
+        </>}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18 }}><button onClick={() => setMessagingRole(null)} style={{ padding: "10px 14px", border: "1px solid #cbd5e1", borderRadius: 8, background: "white", cursor: "pointer" }}>Annuler</button><button disabled={loadingMessagingRules || savingMessagingRules} onClick={saveRoleMessaging} style={{ padding: "10px 14px", border: 0, borderRadius: 8, background: "#2563eb", color: "white", cursor: "pointer" }}>{savingMessagingRules ? "Enregistrement…" : "Enregistrer"}</button></div>
+      </div>
+    </div>}
   </>
 )}
 
