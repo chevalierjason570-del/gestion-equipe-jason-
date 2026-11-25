@@ -448,7 +448,7 @@ export default function Messenger({ currentUserId }: Props) {
                 </div>
               ) : messages.map(message => {
                 const own = message.sender_id === currentUserId;
-                const canDelete = currentRole === "admin" || own;
+                const canDelete = currentRole === "admin";
                 return (
                   <div key={message.id} style={{ display: "flex", justifyContent: own ? "flex-end" : "flex-start", marginBottom: 12 }}>
                     <article style={{ maxWidth: "min(78%, 560px)", background: own ? "#dbeafe" : "#fff", border: "1px solid #dbe3ef", borderRadius: 12, padding: 10, boxShadow: "0 1px 2px rgba(15,23,42,.04)" }}>
