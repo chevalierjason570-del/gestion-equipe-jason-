@@ -68,5 +68,16 @@ export async function getConversationForUser(conversationId: string, user: Messa
   // Une conversation valide relie exactement un admin et un membre.
   if (userIsAdmin === otherIsAdmin) return null;
 
+  // Une autorisation cochée pour le rôle du membre est requise des deux côtés.
+  const permissionRole = userIsAdmin ? String(otherProfile.role) : user.role;
+  const permissionUserId = userIsAdmin ? otherUserId : user.id;
+  const { data: permission, error: permissionError } = await messagingSupabase
+    .from("role_messaging_users")
+    .select("user_id")
+    .eq("role_key", permissionRole)
+    .eq("user_id", permissionUserId)
+    .maybeSingle();
+  if (permissionError || !permission) return null;
+
   return data;
 }
