@@ -456,6 +456,21 @@ export async function GET(request: Request) {
 
   try {
     const { searchParams } = new URL(request.url);
+    if (searchParams.has("preview")) {
+      const filePath = safeFolderPath(searchParams.get("preview") || "");
+      if (user.role !== "admin" && !canAccessPath(user, filePath, "file")) {
+        return NextResponse.json({ error: "Accès interdit à ce fichier." }, { status: 403 });
+      }
+      const object = await getB2Client().send(new GetObjectCommand({ Bucket: B2_BUCKET, Key: filePath }));
+      if (!object.Body) return NextResponse.json({ error: "Fichier introuvable ou vide." }, { status: 404 });
+      const headers = new Headers({
+        "Content-Type": object.ContentType || "application/vnd.oasis.opendocument.text",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+      });
+      if (object.ContentLength !== undefined) headers.set("Content-Length", String(object.ContentLength));
+      return new Response(object.Body.transformToWebStream(), { headers });
+    }
     if (searchParams.has("downloadFolder")) {
       const folderPath = safeFolderPath(searchParams.get("downloadFolder") || "");
       if (user.role !== "admin" && !canAccessPath(user, folderPath, "folder")) {
