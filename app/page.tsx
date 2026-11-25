@@ -429,8 +429,7 @@ const openExplorerFile = (entry: FileEntry | null | undefined) => {
   if (isOdtFile(entry)) setOdtPreviewEntry(entry);
   else if (entry.previewUrl) window.open(entry.previewUrl, "_blank", "noopener,noreferrer");
 };
-const showFileTools, setShowFileTools] = useState(false);
-  useEffect(() => {
+const [showFileTools, setShowFileTools] = useState(false);  useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setUser(data.session?.user ?? null);
     });
