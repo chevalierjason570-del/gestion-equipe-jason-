@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent, type CSSProperties } from "react";
 import { supabase } from "@/lib/supabase";
 import Messenger from "@/app/components/Messenger";
 import AdminSettings from "@/app/components/AdminSettings";
@@ -31,6 +31,14 @@ const permissionOptions = [
   { id: "messages", label: "Messagerie" },
   { id: "parametres", label: "Paramètres" },
 ];
+
+const explorerIconButton: CSSProperties = { border: "1px solid #465268", background: "#263247", color: "white", borderRadius: 9, width: 38, height: 38, cursor: "pointer", fontSize: 19 };
+const explorerToolbarButton: CSSProperties = { border: 0, background: "transparent", color: "white", padding: "9px 11px", borderRadius: 8, cursor: "pointer", fontSize: 13 };
+const explorerPrimaryButton: CSSProperties = { border: 0, background: "#2563eb", color: "white", padding: "10px 12px", borderRadius: 8, cursor: "pointer" };
+const explorerNavItem: CSSProperties = { padding: "10px 9px", borderRadius: 7, fontSize: 14, color: "#263247" };
+const explorerNavActive: CSSProperties = { padding: "10px 9px", borderRadius: 7, fontSize: 14, color: "#1d4ed8", background: "#dbeafe", fontWeight: 650, cursor: "pointer" };
+const explorerDetailButton: CSSProperties = { display: "block", width: "100%", textAlign: "left", padding: "9px 10px", marginTop: 7, border: "1px solid #dbe3ee", borderRadius: 8, background: "white", color: "#172033", cursor: "pointer" };
+const explorerDetailLink: CSSProperties = { display: "block", padding: "9px 10px", marginTop: 7, border: "1px solid #dbe3ee", borderRadius: 8, background: "white", color: "#172033", textDecoration: "none" };
 
 const MAX_UPLOAD_BYTES = 10_000_000_000;
 const MAX_STORAGE_BYTES = 10_000_000_000;
@@ -405,6 +413,8 @@ const [selectedFile, setSelectedFile] = useState<File | null>(null);
 const [fileActionLoading, setFileActionLoading] = useState(false);
 const [uploadProgress, setUploadProgress] = useState<number | null>(null);
 const [storageUsageBytes, setStorageUsageBytes] = useState(0);
+const [selectedExplorerEntry, setSelectedExplorerEntry] = useState<FileEntry | null>(null);
+const [showFileTools, setShowFileTools] = useState(false);
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setUser(data.session?.user ?? null);
@@ -1795,473 +1805,131 @@ async function uploadFolder() {
 )}
 
 {active === "fichiers" && (
-  <>
-    <h2>📁 Fichiers partagés</h2>
-
-    <p style={{ color: "#64748b" }}>
-      Consulte les documents de ton équipe. Les aperçus et téléchargements sont disponibles pour tous les membres connectés.
-    </p>
-
-    {/* Navigation des dossiers */}
-    <div style={{
-      background: "white",
-      padding: 18,
-      borderRadius: 12,
-      marginTop: 20,
-      marginBottom: 20
-    }}>
-      <strong>📂 Emplacement : </strong>
-
-      <button
-        onClick={() => setCurrentFolder("")}
-        style={{
-          border: 0,
-          background: "transparent",
-          color: "#2563eb",
-          cursor: "pointer"
-        }}
-      >
-        Accueil
-      </button>
-
-      {currentFolder.split("/").filter(Boolean).map((part, index, parts) => {
-        const path = parts.slice(0, index + 1).join("/");
-
-        return (
-          <span key={path}>
-            {" / "}
-            <button
-              onClick={() => setCurrentFolder(path)}
-              style={{
-                border: 0,
-                background: "transparent",
-                color: "#2563eb",
-                cursor: "pointer"
-              }}
-            >
-              {part}
-            </button>
-          </span>
-        );
-      })}
+  <div style={{
+    margin: -24,
+    minHeight: "calc(100vh - 90px)",
+    background: "#f8fafc",
+    border: "1px solid #dbe3ee",
+    borderRadius: 14,
+    overflow: "hidden",
+    color: "#172033",
+    display: "flex",
+    flexDirection: "column",
+    boxShadow: "0 8px 28px rgba(15,23,42,.07)"
+  }}>
+    {/* Barre supérieure façon Explorateur Windows */}
+    <div style={{ background: "#172033", color: "white", padding: "15px 22px", display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 210 }}>
+        <span style={{ fontSize: 27 }}>📁</span>
+        <strong style={{ fontSize: 20 }}>Fichiers partagés</strong>
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <button title="Dossier précédent" onClick={() => setCurrentFolder(current => current.split("/").slice(0, -1).join("/"))} style={explorerIconButton}>←</button>
+        <button title="Accueil" onClick={() => setCurrentFolder("")} style={explorerIconButton}>⌂</button>
+        <button title="Actualiser" onClick={loadFiles} style={explorerIconButton}>↻</button>
+      </div>
+      <div style={{ flex: 1, minWidth: 220, padding: "11px 16px", borderRadius: 12, background: "#263247", border: "1px solid #3b485d", color: "#e2e8f0" }}>
+        🏠　Accueil　›　{currentFolder || "Fichiers partagés"}
+      </div>
+      <div style={{ padding: "11px 15px", borderRadius: 12, background: "#263247", color: "#cbd5e1", minWidth: 210 }}>⌕　Rechercher dans : {currentFolder.split("/").pop() || "Fichiers"}</div>
     </div>
 
-    {fileUserCanManage && (<>
-    {/* Création de dossier */}
-    <div style={{
-      background: "white",
-      padding: 22,
-      borderRadius: 12,
-      marginBottom: 20
-    }}>
-      <h3>📁 Créer un dossier</h3>
+    {/* Barre d'outils */}
+    <div style={{ background: "#202b3d", color: "white", padding: "10px 18px", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", borderTop: "1px solid #344155" }}>
+      <button onClick={() => setShowFileTools(value => !value)} style={explorerToolbarButton}>＋　Nouveau　⌄</button>
+      <span style={{ color: "#64748b", margin: "0 5px" }}>|</span>
+      <button onClick={() => selectedExplorerEntry?.type === "folder" ? setCurrentFolder(selectedExplorerEntry.path) : selectedExplorerEntry?.previewUrl && window.open(selectedExplorerEntry.previewUrl, "_blank", "noopener,noreferrer")} disabled={!selectedExplorerEntry} style={explorerToolbarButton}>▱　Ouvrir</button>
+      <button onClick={() => selectedExplorerEntry?.type === "folder" ? downloadFolder(selectedExplorerEntry) : selectedExplorerEntry?.downloadUrl && window.open(selectedExplorerEntry.downloadUrl, "_blank")} disabled={!selectedExplorerEntry} style={explorerToolbarButton}>↓　Télécharger</button>
+      {fileUserCanManage && <>
+        <button onClick={() => selectedExplorerEntry && renameEntry(selectedExplorerEntry)} disabled={!selectedExplorerEntry} style={explorerToolbarButton}>✎　Renommer</button>
+        <button onClick={() => selectedExplorerEntry && moveEntry(selectedExplorerEntry)} disabled={!selectedExplorerEntry} style={explorerToolbarButton}>⇄　Déplacer</button>
+        <button onClick={() => selectedExplorerEntry && deleteFile(selectedExplorerEntry)} disabled={!selectedExplorerEntry} style={{ ...explorerToolbarButton, color: "#fecaca" }}>▤　Supprimer</button>
+      </>}
+      <span style={{ flex: 1 }} />
+      <span style={{ fontSize: 13, color: "#cbd5e1" }}>▣　Détails</span>
+    </div>
 
-      <form
-        onSubmit={createFolder}
-        style={{
-          display: "flex",
-          gap: 10,
-          flexWrap: "wrap"
-        }}
-      >
-        <input
-          value={newFolderName}
-          onChange={e => setNewFolderName(e.target.value)}
-          placeholder="Nom du nouveau dossier"
-          style={{
-            ...inputStyle,
-            flex: 1,
-            minWidth: 180
-          }}
-        />
-
-        <button
-          disabled={fileActionLoading}
-          style={{
-            padding: 12,
-            background: "#2563eb",
-            color: "white",
-            border: 0,
-            borderRadius: 8,
-            cursor: "pointer"
-          }}
-        >
-          Créer
-        </button>
+    {showFileTools && fileUserCanManage && <div style={{ padding: 16, background: "#eff6ff", borderBottom: "1px solid #dbeafe", display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(230px,1fr))", gap: 14 }}>
+      <form onSubmit={createFolder} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <input value={newFolderName} onChange={e => setNewFolderName(e.target.value)} placeholder="Nom du nouveau dossier" style={{ ...inputStyle, flex: 1, minWidth: 140, margin: 0 }} />
+        <button disabled={fileActionLoading} style={explorerPrimaryButton}>＋ Créer dossier</button>
       </form>
-    </div>
-
-    {/* Quota de stockage gratuit Backblaze B2 */}
-    <div style={{ background: "white", padding: 18, borderRadius: 12, marginBottom: 20 }}>
-      <h3>☁️ Stockage partagé</h3>
-      <p style={{ color: "#475569", marginBottom: 8 }}>
-        {(storageUsageBytes / 1_000_000_000).toFixed(2)} Go utilisés sur 10 Go gratuits.
-      </p>
-      <div style={{ height: 12, background: "#e2e8f0", borderRadius: 999, overflow: "hidden" }}>
-        <div style={{
-          width: `${Math.min(100, (storageUsageBytes / MAX_STORAGE_BYTES) * 100)}%`,
-          height: "100%", background: storageUsageBytes >= MAX_STORAGE_BYTES ? "#dc2626" : "#2563eb",
-        }} />
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <input type="file" onChange={e => setSelectedFile(e.target.files?.[0] || null)} style={{ maxWidth: 190 }} />
+        <button onClick={uploadFile} disabled={fileActionLoading || !selectedFile} style={explorerPrimaryButton}>↑ Envoyer fichier</button>
       </div>
-      <p style={{ color: "#64748b", fontSize: 12, marginTop: 8 }}>
-        Limite de l'application : 10 Go au total pour l'ensemble des membres.
-      </p>
-    </div>
-
-    {/* Ajout de fichier */}
-    <div style={{
-      background: "white",
-      padding: 22,
-      borderRadius: 12,
-      marginBottom: 20
-    }}>
-      <h3>📤 Ajouter un fichier</h3>
-
-      <input
-        type="file"
-        onChange={e =>
-          setSelectedFile(e.target.files?.[0] || null)
-        }
-        style={{
-          display: "block",
-          marginBottom: 15
-        }}
-      />
-
-      <p style={{ color: "#64748b", fontSize: 13 }}>
-        Taille maximale : 10 Go par fichier. Envoi direct et reprenable.
-      </p>
-
-      <button
-        onClick={uploadFile}
-        disabled={fileActionLoading || !selectedFile}
-        style={{
-          padding: 12,
-          background: "#15803d",
-          color: "white",
-          border: 0,
-          borderRadius: 8,
-          cursor: "pointer"
-        }}
-      >
-        {fileActionLoading ? "Traitement..." : "Envoyer le fichier"}
-      </button>
-    </div>
-
-{/* Téléverser un dossier complet */}
-<div style={{
-  background: "white",
-  padding: 22,
-  borderRadius: 12,
-  marginBottom: 20
-}}>
-  <h3>📁 Téléverser un dossier complet</h3>
-
-  <p style={{ color: "#64748b" }}>
-    Sélectionne un dossier depuis ton ordinateur.
-  </p>
-
-  <input
-    type="file"
-    multiple
-    {...({ webkitdirectory: "", directory: "" } as any)}
-    onChange={e =>
-      setSelectedFolderFiles(
-        Array.from(e.target.files || [])
-      )
-    }
-    style={{ marginBottom: 15 }}
-  />
-
-  <p style={{ color: "#64748b", fontSize: 13 }}>
-    {selectedFolderFiles.length > 0
-      ? `${selectedFolderFiles.length} fichier(s) sélectionné(s)`
-      : "Aucun dossier sélectionné"}
-  </p>
-
-  <button
-    type="button"
-    onClick={uploadFolder}
-    disabled={fileActionLoading || selectedFolderFiles.length === 0}
-    style={{
-      padding: 12,
-      background: "#7c3aed",
-      color: "white",
-      border: 0,
-      borderRadius: 8,
-      cursor: "pointer"
-    }}
-  >
-    {fileActionLoading ? "Téléversement..." : "📁 Envoyer le dossier"}
-  </button>
-</div>
-    </>)}
-
-    {/* Messages */}
-    {filesError && (
-      <p style={{ color: "#dc2626" }}>{filesError}</p>
-    )}
-
-    {filesSuccess && (
-      <p style={{ color: "#15803d" }}>{filesSuccess}</p>
-    )}
-
-    {fileUserCanManage && uploadProgress !== null && (
-      <div style={{ margin: "12px 0", maxWidth: 520 }}>
-        <div
-          role="progressbar"
-          aria-label="Progression du téléversement"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={uploadProgress}
-          style={{
-            height: 12,
-            background: "#e2e8f0",
-            borderRadius: 999,
-            overflow: "hidden",
-          }}
-        >
-          <div style={{
-            width: `${uploadProgress}%`,
-            height: "100%",
-            background: "#2563eb",
-            transition: "width 150ms linear",
-          }} />
-        </div>
-        <p style={{ color: "#475569", fontSize: 13 }}>
-          Envoi en cours : {uploadProgress}%
-        </p>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <input type="file" multiple {...({ webkitdirectory: "", directory: "" } as any)} onChange={e => setSelectedFolderFiles(Array.from(e.target.files || []))} style={{ maxWidth: 190 }} />
+        <button type="button" onClick={uploadFolder} disabled={fileActionLoading || selectedFolderFiles.length === 0} style={explorerPrimaryButton}>↑ Envoyer dossier</button>
       </div>
-    )}
+      <div style={{ gridColumn: "1 / -1", color: "#475569", fontSize: 12 }}>Stockage : {(storageUsageBytes / 1_000_000_000).toFixed(2)} Go utilisés sur 10 Go · Limite de 10 Go pour l'équipe.</div>
+    </div>}
 
-    {/* Liste des fichiers */}
-    <div style={{
-      background: "white",
-      padding: 22,
-      borderRadius: 12
-    }}>
-      <h3>📂 Contenu du dossier</h3>
-      <p style={{ color: "#475569", marginTop: 6, marginBottom: 14 }}>
-        {files.filter(item => item.type === "file").length} fichier(s) dans ce dossier
-      </p>
+    {filesError && <p style={{ margin: 12, color: "#b91c1c" }}>{filesError}</p>}
+    {filesSuccess && <p style={{ margin: 12, color: "#15803d" }}>{filesSuccess}</p>}
+    {fileUserCanManage && uploadProgress !== null && <div style={{ padding: "8px 18px", background: "#eff6ff", color: "#1d4ed8" }}>Envoi en cours : {uploadProgress}%</div>}
 
-      {loadingFiles ? (
-        <p>Chargement...</p>
-      ) : files.length === 0 ? (
-        <p style={{ color: "#64748b" }}>
-          Ce dossier est vide.
-        </p>
-      ) : (
-        <div style={{ overflowX: "auto" }}>
-          <table style={{
-            width: "100%",
-            borderCollapse: "collapse",
-            textAlign: "left"
-          }}>
-            <thead>
-              <tr>
-                <th style={{ padding: 12 }}>Nom</th>
-                <th style={{ padding: 12 }}>Type</th>
-                <th style={{ padding: 12 }}>Taille</th>
-                <th style={{ padding: 12 }}>Date et heure</th>
-                <th style={{ padding: 12 }}>Consulter / télécharger</th>
-              </tr>
-            </thead>
+    {/* Navigation latérale, liste et panneau de détails */}
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(170px, 230px) minmax(0, 1fr) minmax(220px, 285px)", flex: 1, minHeight: 440 }}>
+      <aside style={{ padding: "16px 12px", background: "#f1f5f9", borderRight: "1px solid #dbe3ee" }}>
+        <div style={explorerNavActive} onClick={() => setCurrentFolder("")} role="button">🏠　Accueil</div>
+        <div style={explorerNavItem}>🖼️　Galerie</div>
+        <div style={explorerNavItem}>☁️　Espace partagé</div>
+        <div style={{ borderTop: "1px solid #dbe3ee", margin: "14px 4px" }} />
+        <div style={explorerNavItem}>🖥️　Bureau</div>
+        <div style={explorerNavItem}>⬇️　Téléchargements</div>
+        <div style={explorerNavItem}>📄　Documents</div>
+        <div style={explorerNavItem}>🖼️　Images</div>
+        <div style={explorerNavItem}>🎵　Musique</div>
+        <div style={explorerNavItem}>🎬　Vidéos</div>
+        <div style={{ borderTop: "1px solid #dbe3ee", margin: "14px 4px" }} />
+        <div style={explorerNavItem}>💻　Ce PC</div>
+        <div style={explorerNavItem}>🌐　Réseau</div>
+      </aside>
 
-            <tbody>
-              {files.map(item => (
-                <tr key={item.path}>
-                  <td style={{
-                    padding: 12,
-                    borderTop: "1px solid #e2e8f0"
-                  }}>
-                    {item.type === "folder" ? "📁" : "📄"}{" "}
-                    {item.name}
-                  </td>
-
-                  <td style={{
-                    padding: 12,
-                    borderTop: "1px solid #e2e8f0"
-                  }}>
-                    {item.type === "folder" ? "Dossier" : "Fichier"}
-                  </td>
-
-                  <td style={{
-                    padding: 12,
-                    borderTop: "1px solid #e2e8f0"
-                  }}>
-                    {`${(item.size || 0) / 1024 / 1024 < 1
-                      ? ((item.size || 0) / 1024).toFixed(1) + " Ko"
-                      : ((item.size || 0) / 1024 / 1024).toFixed(2) + " Mo"}`}
-                  </td>
-
-                  <td style={{
-                    padding: 12,
-                    borderTop: "1px solid #e2e8f0",
-                    whiteSpace: "nowrap",
-                    color: "#475569",
-                    fontSize: 13
-                  }}>
-                    {item.created_at
-                      ? new Date(item.created_at).toLocaleString("fr-FR", {
-                          dateStyle: "short",
-                          timeStyle: "short"
-                        })
-                      : "—"}
-                  </td>
-
-                  <td style={{
-                    padding: 12,
-                    borderTop: "1px solid #e2e8f0",
-                    whiteSpace: "nowrap"
-                  }}>
-                    {item.type === "folder" && (
-                      <>
-                        <button
-                          onClick={() => setCurrentFolder(item.path)}
-                          style={{
-                            padding: 8,
-                            background: "#2563eb",
-                            color: "white",
-                            border: 0,
-                            borderRadius: 6,
-                            cursor: "pointer",
-                            marginRight: 6,
-                            marginBottom: 4,
-                          }}
-                        >
-                          Ouvrir
-                        </button>
-                        <button
-                          onClick={() => downloadFolder(item)}
-                          style={{
-                            padding: 8,
-                            background: "#15803d",
-                            color: "white",
-                            border: 0,
-                            borderRadius: 6,
-                            cursor: "pointer",
-                            marginRight: 6,
-                            marginBottom: 4,
-                          }}
-                        >
-                          Télécharger le dossier (.zip)
-                        </button>
-                      </>
-                    )}
-
-                    {item.type === "file" && item.previewUrl && (
-                      <a
-                        href={item.previewUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{
-                          display: "inline-block",
-                          padding: 8,
-                          background: "#2563eb",
-                          color: "white",
-                          borderRadius: 6,
-                          textDecoration: "none",
-                          marginRight: 6,
-                          marginBottom: 4,
-                        }}
-                      >
-                        Aperçu
-                      </a>
-                    )}
-
-                    {item.type === "file" && item.downloadUrl && (
-                      <a
-                        href={item.downloadUrl}
-                        style={{
-                          display: "inline-block",
-                          padding: 8,
-                          background: "#15803d",
-                          color: "white",
-                          borderRadius: 6,
-                          textDecoration: "none",
-                          marginRight: 6,
-                          marginBottom: 4,
-                        }}
-                      >
-                        Télécharger
-                      </a>
-                    )}
-
-                    {fileUserCanManage && (<>
-                    <button
-                      onClick={() => renameEntry(item)}
-                      disabled={fileActionLoading}
-                      style={{
-                        padding: 8,
-                        background: "#d97706",
-                        color: "white",
-                        border: 0,
-                        borderRadius: 6,
-                        cursor: "pointer",
-                        marginRight: 6,
-                        marginBottom: 4,
-                      }}
-                    >
-                      Renommer
-                    </button>
-
-                    <button
-                      onClick={() => moveEntry(item)}
-                      disabled={fileActionLoading}
-                      style={{
-                        padding: 8,
-                        background: "#7c3aed",
-                        color: "white",
-                        border: 0,
-                        borderRadius: 6,
-                        cursor: "pointer",
-                        marginRight: 6,
-                        marginBottom: 4,
-                      }}
-                    >
-                      Déplacer
-                    </button>
-
-                    <button
-                      onClick={() => deleteFile(item)}
-                      disabled={fileActionLoading}
-                      style={{
-                        padding: 8,
-                        background: "#dc2626",
-                        color: "white",
-                        border: 0,
-                        borderRadius: 6,
-                        cursor: "pointer",
-                        marginBottom: 4,
-                      }}
-                    >
-                      Supprimer
-                    </button>
-                    </>)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      <section style={{ minWidth: 0, background: "white", overflowX: "auto" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(170px,1.3fr) minmax(125px,1fr) minmax(100px,.8fr) minmax(130px,1fr)", padding: "13px 18px", background: "#f8fafc", borderBottom: "1px solid #e2e8f0", fontWeight: 650, fontSize: 13, color: "#334155", minWidth: 570 }}>
+          <span>Nom　↑</span><span>Modifié le</span><span>Type</span><span>Taille</span>
         </div>
-      )}
+        {loadingFiles ? <p style={{ padding: 24, color: "#64748b" }}>Chargement des éléments...</p> : files.length === 0 ? <div style={{ padding: 30, color: "#64748b" }}>Ce dossier est vide.</div> : files.map(item => {
+          const selected = selectedExplorerEntry?.path === item.path;
+          return <div key={item.path} onClick={() => setSelectedExplorerEntry(item)} onDoubleClick={() => item.type === "folder" ? setCurrentFolder(item.path) : item.previewUrl && window.open(item.previewUrl, "_blank", "noopener,noreferrer")} style={{ display: "grid", gridTemplateColumns: "minmax(170px,1.3fr) minmax(125px,1fr) minmax(100px,.8fr) minmax(130px,1fr)", padding: "13px 18px", borderBottom: "1px solid #edf1f6", background: selected ? "#dbeafe" : "white", cursor: "default", alignItems: "center", minWidth: 570 }}>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.type === "folder" ? "📁" : "📄"}　{item.name}</span>
+            <span style={{ color: "#475569", fontSize: 13 }}>{item.created_at ? new Date(item.created_at).toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" }) : "—"}</span>
+            <span style={{ fontSize: 13 }}>{item.type === "folder" ? "Dossier" : "Fichier"}</span>
+            <span style={{ fontSize: 13 }}>{item.type === "folder" ? "—" : (item.size || 0) < 1024 * 1024 ? `${((item.size || 0) / 1024).toFixed(1)} Ko` : `${((item.size || 0) / 1024 / 1024).toFixed(2)} Mo`}</span>
+          </div>;
+        })}
+      </section>
 
-      <button
-        onClick={loadFiles}
-        style={{
-          marginTop: 18,
-          padding: 10,
-          background: "#e2e8f0",
-          border: 0,
-          borderRadius: 8,
-          cursor: "pointer"
-        }}
-      >
-        ↻ Actualiser
-      </button>
+      <aside style={{ background: "#f8fafc", borderLeft: "1px solid #dbe3ee", padding: 18 }}>
+        {selectedExplorerEntry ? <>
+          <div style={{ textAlign: "center", fontSize: 76, padding: "12px 0" }}>{selectedExplorerEntry.type === "folder" ? "📁" : "📄"}</div>
+          <h3 style={{ margin: "4px 0", overflowWrap: "anywhere" }}>{selectedExplorerEntry.name}</h3>
+          <p style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>{selectedExplorerEntry.type === "folder" ? "Dossier" : "Fichier"}</p>
+          <div style={{ borderTop: "1px solid #dbe3ee", margin: "16px 0" }} />
+          <strong>Actions rapides</strong>
+          {selectedExplorerEntry.type === "folder" ? <button onClick={() => setCurrentFolder(selectedExplorerEntry.path)} style={explorerDetailButton}>📂　Ouvrir</button> : selectedExplorerEntry.previewUrl && <a href={selectedExplorerEntry.previewUrl} target="_blank" rel="noopener noreferrer" style={explorerDetailLink}>↗　Aperçu</a>}
+          {selectedExplorerEntry.type === "folder" && <button onClick={() => downloadFolder(selectedExplorerEntry)} style={explorerDetailButton}>↓　Télécharger le dossier (.zip)</button>}
+          {selectedExplorerEntry.type === "file" && selectedExplorerEntry.downloadUrl && <a href={selectedExplorerEntry.downloadUrl} style={explorerDetailLink}>↓　Télécharger</a>}
+          {fileUserCanManage && <>
+            <button onClick={() => renameEntry(selectedExplorerEntry)} style={explorerDetailButton}>✎　Renommer</button>
+            <button onClick={() => moveEntry(selectedExplorerEntry)} style={explorerDetailButton}>⇄　Déplacer</button>
+            <button onClick={() => deleteFile(selectedExplorerEntry)} style={{ ...explorerDetailButton, color: "#b91c1c" }}>▤　Supprimer</button>
+          </>}
+          <div style={{ borderTop: "1px solid #dbe3ee", margin: "16px 0" }} />
+          <strong>Détails</strong>
+          <p style={{ fontSize: 13, color: "#475569", lineHeight: 1.8 }}>Type : {selectedExplorerEntry.type === "folder" ? "Dossier" : "Fichier"}<br />Taille : {selectedExplorerEntry.type === "folder" ? "—" : `${((selectedExplorerEntry.size || 0) / 1024 / 1024).toFixed(2)} Mo`}<br />Modifié : {selectedExplorerEntry.created_at ? new Date(selectedExplorerEntry.created_at).toLocaleString("fr-FR") : "—"}</p>
+        </> : <div style={{ textAlign: "center", color: "#64748b", paddingTop: 40 }}><div style={{ fontSize: 70 }}>📁</div><strong style={{ color: "#334155" }}>{currentFolder.split("/").pop() || "Fichiers partagés"}</strong><p style={{ fontSize: 13 }}>{files.length} élément(s)</p><p style={{ marginTop: 28, fontSize: 13 }}>Sélectionne un fichier ou un dossier pour afficher ses détails et ses actions.</p></div>}
+      </aside>
     </div>
-  </>
+
+    {/* Barre d'état inférieure */}
+    <footer style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, padding: "11px 18px", background: "#f1f5f9", borderTop: "1px solid #dbe3ee", color: "#334155", fontSize: 13 }}>
+      <span>👥　{files.length} élément(s)　{selectedExplorerEntry ? `· ${selectedExplorerEntry.name} sélectionné` : ""}</span>
+      <button onClick={loadFiles} style={{ ...explorerIconButton, color: "#334155", background: "#e2e8f0" }}>↻ Actualiser</button>
+    </footer>
+  </div>
 )}
         {active === "messages" && <Messenger currentUserId={user.id} />}
 
