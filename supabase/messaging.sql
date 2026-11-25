@@ -70,44 +70,8 @@ grant usage on schema public to service_role;
 grant select, insert, update, delete on public.direct_conversations to service_role;
 grant select, insert, update, delete on public.direct_messages to service_role;
 
--- Vérifier côté base que chaque échange relie un admin et un membre.
-create or replace function public.enforce_direct_conversation_admin_member_pair()
-returns trigger
-language plpgsql
-security definer
-set search_path = ''
-as $$
-declare
-  role_a text;
-  role_b text;
-begin
-  select p.role::text into role_a
-  from public.profiles as p
-  where p.id = new.user_a;
-
-  select p.role::text into role_b
-  from public.profiles as p
-  where p.id = new.user_b;
-
-  if role_a is null or role_b is null or ((role_a = 'admin') = (role_b = 'admin')) then
-    raise exception 'Une conversation doit réunir exactement un administrateur et un membre.'
-      using errcode = '23514';
-  end if;
-
-  return new;
-end;
-$$;
-
-revoke all on function public.enforce_direct_conversation_admin_member_pair()
-  from public, anon, authenticated;
-
+-- Les conversations privées peuvent relier deux utilisateurs quelconques.
+-- Les autorisations par rôle sont vérifiées par les API serveur avant chaque accès.
 drop trigger if exists direct_conversations_require_admin_member
   on public.direct_conversations;
-create trigger direct_conversations_require_admin_member
-before insert or update of user_a, user_b
-on public.direct_conversations
-for each row
-execute function public.enforce_direct_conversation_admin_member_pair();
-
--- Demande à PostgREST de relire le schéma après la création/mise à jour.
 notify pgrst, 'reload schema';
