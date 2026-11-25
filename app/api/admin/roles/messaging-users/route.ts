@@ -18,15 +18,16 @@ async function isAdmin(request: Request) {
 export async function GET(request: Request) {
   if (!await isAdmin(request)) return NextResponse.json({ error: "Accès administrateur refusé." }, { status: 403 });
   const roleKey = new URL(request.url).searchParams.get("roleKey")?.trim() || "";
-  if (!roleKey) return NextResponse.json({ error: "Rôle invalide." }, { status: 400 });
-  const { data: role, error: roleError } = await db.from("roles").select("role_key").eq("role_key", roleKey).maybeSingle();
-  if (roleError || !role) return NextResponse.json({ error: "Rôle introuvable." }, { status: 404 });
+  if (roleKey) {
+    const { data: role, error: roleError } = await db.from("roles").select("role_key").eq("role_key", roleKey).maybeSingle();
+    if (roleError || !role) return NextResponse.json({ error: "Rôle introuvable." }, { status: 404 });
+  }
   const [{ data: users, error: usersError }, { data: allowed, error: allowedError }] = await Promise.all([
     db.from("profiles").select("id, username, display_name, role").order("display_name", { ascending: true }),
-    db.from("role_messaging_users").select("user_id").eq("role_key", roleKey),
+    roleKey ? db.from("role_messaging_users").select("user_id").eq("role_key", roleKey) : Promise.resolve({ data: [], error: null }),
   ]);
   if (usersError || allowedError) return NextResponse.json({ error: "Impossible de charger les utilisateurs. Vérifie que supabase/role-messaging-users.sql a été exécuté." }, { status: 500 });
-  return NextResponse.json({ users: users || [], allowedUserIds: (allowed || []).map(row => row.user_id) }, { headers: { "Cache-Control": "no-store" } });
+  return NextResponse.json({ users: users || [], allowedUserIds: (allowed || []).map((row: { user_id: string }) => row.user_id) }, { headers: { "Cache-Control": "no-store" } });
 }
 
 export async function PUT(request: Request) {
