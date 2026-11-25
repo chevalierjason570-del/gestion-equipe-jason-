@@ -1870,23 +1870,7 @@ async function uploadFolder() {
     {fileUserCanManage && uploadProgress !== null && <div style={{ padding: "8px 18px", background: "#eff6ff", color: "#1d4ed8" }}>Envoi en cours : {uploadProgress}%</div>}
 
     {/* Navigation latérale, liste et panneau de détails */}
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(170px, 230px) minmax(0, 1fr) minmax(220px, 285px)", flex: 1, minHeight: 440 }}>
-      <aside style={{ padding: "16px 12px", background: "#f1f5f9", borderRight: "1px solid #dbe3ee" }}>
-        <div style={explorerNavActive} onClick={() => setCurrentFolder("")} role="button">🏠　Accueil</div>
-        <div style={explorerNavItem}>🖼️　Galerie</div>
-        <div style={explorerNavItem}>☁️　Espace partagé</div>
-        <div style={{ borderTop: "1px solid #dbe3ee", margin: "14px 4px" }} />
-        <div style={explorerNavItem}>🖥️　Bureau</div>
-        <div style={explorerNavItem}>⬇️　Téléchargements</div>
-        <div style={explorerNavItem}>📄　Documents</div>
-        <div style={explorerNavItem}>🖼️　Images</div>
-        <div style={explorerNavItem}>🎵　Musique</div>
-        <div style={explorerNavItem}>🎬　Vidéos</div>
-        <div style={{ borderTop: "1px solid #dbe3ee", margin: "14px 4px" }} />
-        <div style={explorerNavItem}>💻　Ce PC</div>
-        <div style={explorerNavItem}>🌐　Réseau</div>
-      </aside>
-
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(220px, 285px)", flex: 1, minHeight: 440 }}>
       <section style={{ minWidth: 0, background: "white", overflowX: "auto" }}>
         <div style={{ display: "grid", gridTemplateColumns: "minmax(170px,1.3fr) minmax(125px,1fr) minmax(100px,.8fr) minmax(130px,1fr)", padding: "13px 18px", background: "#f8fafc", borderBottom: "1px solid #e2e8f0", fontWeight: 650, fontSize: 13, color: "#334155", minWidth: 570 }}>
           <span>Nom　↑</span><span>Modifié le</span><span>Type</span><span>Taille</span>
