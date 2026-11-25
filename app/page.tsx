@@ -1854,7 +1854,7 @@ async function uploadFolder() {
             </div>
           )}
           <strong style={{ display: "block", marginTop: 18 }}>Accès aux dossiers et fichiers</strong>
-          <p style={{ color: "#64748b", fontSize: 13 }}>Une règle par ligne au format <code>deny|folder|Documents/Confidentiel</code> ou <code>allow|file|Documents/Confidentiel/rapport.pdf</code>. Un refus sur un dossier s'applique à son contenu. Une autorisation explicite sur un fichier constitue une exception.</p>
+          <p style={{ color: "#64748b", fontSize: 13 }}>Une règle par ligne au format <code>deny|folder|Documents/Confidentiel</code> ou <code>deny|file|Documents/Confidentiel/rapport.pdf</code>. Un refus sur un dossier bloque aussi tous ses sous-dossiers et fichiers, sans exception.</p>
           <div style={{ border: "1px solid #dbe3ee", borderRadius: 10, overflow: "hidden", marginTop: 8, background: "#fff" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", padding: "9px 10px", background: "#172033", color: "white" }}>
               <button type="button" title="Dossier précédent" onClick={() => { setRoleFileCurrentFolder(current => current.split("/").slice(0, -1).join("/")); setRoleFileSelectedEntry(null); }} disabled={!roleFileCurrentFolder} style={{ border: "1px solid #465268", background: "#263247", color: "white", borderRadius: 7, padding: "5px 9px", cursor: roleFileCurrentFolder ? "pointer" : "not-allowed" }}>←</button>
@@ -1899,7 +1899,7 @@ async function uploadFolder() {
             </div>}
             <div style={{ padding: "7px 10px", background: "#f1f5f9", borderTop: "1px solid #dbe3ee", color: "#475569", fontSize: 11 }}>{roleFileEntries.filter(entry => { const parent = entry.path.includes("/") ? entry.path.slice(0, entry.path.lastIndexOf("/")) : ""; return parent === roleFileCurrentFolder; }).length} élément(s) dans ce dossier · Double-clique sur un dossier pour l'ouvrir</div>
           </div>
-          <p style={{ color: "#64748b", fontSize: 12 }}>Coché = interdit et invisible. Un dossier interdit masque son contenu. Décoche un fichier pour créer une exception d'accès s'il se trouve dans un dossier interdit.</p>
+          <p style={{ color: "#64748b", fontSize: 12 }}>Coché = interdit et invisible. Un dossier interdit bloque tout son contenu. Une autorisation sur un fichier ne peut pas contourner le refus de son dossier parent.</p>
           <button disabled={savingRole} style={{ width: "100%", padding: 12, marginTop: 12, background: "#2563eb", color: "white", border: 0, borderRadius: 8, cursor: "pointer" }}>{savingRole ? "Enregistrement..." : editingRoleId ? "Enregistrer les modifications" : "Créer le rôle"}</button>
           {editingRoleId && <button type="button" onClick={() => { setEditingRoleId(""); setRoleName(""); setRolePermissions(["accueil"]); setRoleFileRulesText(""); setRoleFileDenied({}); setRoleFileCurrentFolder(""); setRoleFileSelectedEntry(null); setMessagingAllowedIds([]); setMessagingRoleUsers([]); }} style={{ width: "100%", padding: 10, marginTop: 8, border: "1px solid #cbd5e1", borderRadius: 8, background: "white" }}>Annuler</button>}
         </form>
