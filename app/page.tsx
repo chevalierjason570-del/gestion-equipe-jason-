@@ -5,6 +5,7 @@ import { useEffect, useState, type FormEvent, type CSSProperties } from "react";
 import { supabase } from "@/lib/supabase";
 import Messenger from "@/app/components/Messenger";
 import AdminSettings from "@/app/components/AdminSettings";
+import OdtPreview from "@/app/components/OdtPreview";
 
 const menu = [
   { id: "accueil", label: "Accueil", icon: "🏠" },
@@ -421,7 +422,14 @@ const [fileActionLoading, setFileActionLoading] = useState(false);
 const [uploadProgress, setUploadProgress] = useState<number | null>(null);
 const [storageUsageBytes, setStorageUsageBytes] = useState(0);
 const [selectedExplorerEntry, setSelectedExplorerEntry] = useState<FileEntry | null>(null);
-const [showFileTools, setShowFileTools] = useState(false);
+const [odtPreviewEntry, setOdtPreviewEntry] = useState<FileEntry | null>(null);
+const isOdtFile = (entry: FileEntry | null | undefined) => Boolean(entry?.type === "file" && entry.name.toLowerCase().endsWith(".odt"));
+const openExplorerFile = (entry: FileEntry | null | undefined) => {
+  if (!entry || entry.type !== "file") return;
+  if (isOdtFile(entry)) setOdtPreviewEntry(entry);
+  else if (entry.previewUrl) window.open(entry.previewUrl, "_blank", "noopener,noreferrer");
+};
+const showFileTools, setShowFileTools] = useState(false);
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setUser(data.session?.user ?? null);
@@ -1976,7 +1984,7 @@ async function uploadFolder() {
     <div style={{ background: "#202b3d", color: "white", padding: "10px 18px", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", borderTop: "1px solid #344155" }}>
       <button onClick={() => setShowFileTools(value => !value)} style={explorerToolbarButton}>＋　Nouveau　⌄</button>
       <span style={{ color: "#64748b", margin: "0 5px" }}>|</span>
-      <button onClick={() => selectedExplorerEntry?.type === "folder" ? setCurrentFolder(selectedExplorerEntry.path) : selectedExplorerEntry?.previewUrl && window.open(selectedExplorerEntry.previewUrl, "_blank", "noopener,noreferrer")} disabled={!selectedExplorerEntry} style={explorerToolbarButton}>▱　Ouvrir</button>
+      <button onClick={() => selectedExplorerEntry?.type === "folder" ? setCurrentFolder(selectedExplorerEntry.path) : openExplorerFile(selectedExplorerEntry)} disabled={!selectedExplorerEntry} style={explorerToolbarButton}>▱　Ouvrir</button>
       <button onClick={() => selectedExplorerEntry?.type === "folder" ? downloadFolder(selectedExplorerEntry) : selectedExplorerEntry?.downloadUrl && window.open(selectedExplorerEntry.downloadUrl, "_blank")} disabled={!selectedExplorerEntry} style={explorerToolbarButton}>↓　Télécharger</button>
       {fileUserCanManage && <>
         <button onClick={() => selectedExplorerEntry && renameEntry(selectedExplorerEntry)} disabled={!selectedExplorerEntry} style={explorerToolbarButton}>✎　Renommer</button>
@@ -2015,7 +2023,7 @@ async function uploadFolder() {
         </div>
         {loadingFiles ? <p style={{ padding: 24, color: "#64748b" }}>Chargement des éléments...</p> : files.length === 0 ? <div style={{ padding: 30, color: "#64748b" }}>Ce dossier est vide.</div> : files.map(item => {
           const selected = selectedExplorerEntry?.path === item.path;
-          return <div key={item.path} onClick={() => setSelectedExplorerEntry(item)} onDoubleClick={() => item.type === "folder" ? setCurrentFolder(item.path) : item.previewUrl && window.open(item.previewUrl, "_blank", "noopener,noreferrer")} style={{ display: "grid", gridTemplateColumns: "minmax(170px,1.3fr) minmax(125px,1fr) minmax(100px,.8fr) minmax(130px,1fr)", padding: "13px 18px", borderBottom: "1px solid #edf1f6", background: selected ? "#dbeafe" : "white", cursor: "default", alignItems: "center", minWidth: 570 }}>
+          return <div key={item.path} onClick={() => setSelectedExplorerEntry(item)} onDoubleClick={() => item.type === "folder" ? setCurrentFolder(item.path) : openExplorerFile(item)} style={{ display: "grid", gridTemplateColumns: "minmax(170px,1.3fr) minmax(125px,1fr) minmax(100px,.8fr) minmax(130px,1fr)", padding: "13px 18px", borderBottom: "1px solid #edf1f6", background: selected ? "#dbeafe" : "white", cursor: "default", alignItems: "center", minWidth: 570 }}>
             <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.type === "folder" ? "📁" : "📄"}　{item.name}</span>
             <span style={{ color: "#475569", fontSize: 13 }}>{item.created_at ? new Date(item.created_at).toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" }) : "—"}</span>
             <span style={{ fontSize: 13 }}>{item.type === "folder" ? "Dossier" : "Fichier"}</span>
@@ -2031,7 +2039,7 @@ async function uploadFolder() {
           <p style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>{selectedExplorerEntry.type === "folder" ? "Dossier" : "Fichier"}</p>
           <div style={{ borderTop: "1px solid #dbe3ee", margin: "16px 0" }} />
           <strong>Actions rapides</strong>
-          {selectedExplorerEntry.type === "folder" ? <button onClick={() => setCurrentFolder(selectedExplorerEntry.path)} style={explorerDetailButton}>📂　Ouvrir</button> : selectedExplorerEntry.previewUrl && <a href={selectedExplorerEntry.previewUrl} target="_blank" rel="noopener noreferrer" style={explorerDetailLink}>↗　Aperçu</a>}
+          {selectedExplorerEntry.type === "folder" ? <button onClick={() => setCurrentFolder(selectedExplorerEntry.path)} style={explorerDetailButton}>📂　Ouvrir</button> : selectedExplorerEntry.previewUrl && (isOdtFile(selectedExplorerEntry) ? <button onClick={() => setOdtPreviewEntry(selectedExplorerEntry)} style={explorerDetailButton}>↗　Aperçu du document ODT</button> : <a href={selectedExplorerEntry.previewUrl} target="_blank" rel="noopener noreferrer" style={explorerDetailLink}>↗　Aperçu</a>)}
           {selectedExplorerEntry.type === "folder" && <button onClick={() => downloadFolder(selectedExplorerEntry)} style={explorerDetailButton}>↓　Télécharger le dossier (.zip)</button>}
           {selectedExplorerEntry.type === "file" && selectedExplorerEntry.downloadUrl && <a href={selectedExplorerEntry.downloadUrl} style={explorerDetailLink}>↓　Télécharger</a>}
           {fileUserCanManage && <>
@@ -2053,6 +2061,7 @@ async function uploadFolder() {
     </footer>
   </div>
 )}
+        {odtPreviewEntry?.previewUrl && <OdtPreview url={odtPreviewEntry.previewUrl} fileName={odtPreviewEntry.name} onClose={() => setOdtPreviewEntry(null)} />}
         {active === "messages" && <Messenger currentUserId={user.id} />}
 
         {isAdmin && active === "parametres" && <AdminSettings />}
