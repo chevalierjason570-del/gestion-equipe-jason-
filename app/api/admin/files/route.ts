@@ -170,7 +170,7 @@ async function listFolderEntries(folder: string) {
 
   const fileEntries = await Promise.all(files.map(async file => {
     const name = file.key.slice(prefix.length);
-    const dispositionName = encodeURIComponent(name).replace(/'/g, "%27");
+    const dispositionName = encodeURIComponent(name).replace(/['()*!]/g, char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
     const [previewUrl, downloadUrl] = await Promise.all([
       getSignedUrl(
         s3Client,
@@ -434,7 +434,7 @@ async function createFolderZipResponse(folderPath: string, user?: { role: string
   })();
 
   const asciiName = `${rootName.replace(/[^A-Za-z0-9_-]/g, "_") || "fichiers"}.zip`;
-  const utf8Name = encodeURIComponent(`${rootName}.zip`);
+  const utf8Name = encodeURIComponent(`${rootName}.zip`).replace(/['()*!]/g, char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
   return new Response(Readable.toWeb(output) as ReadableStream, {
     headers: {
       "Content-Type": "application/zip",
