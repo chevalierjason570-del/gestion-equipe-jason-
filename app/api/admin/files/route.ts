@@ -66,21 +66,16 @@ function canAccessPath(user: { role: string; fileRules: Array<{path:string;entry
   if (user.role === "admin") return true;
   const normalizedPath = normalizeRulePath(path);
   const rules = (user.fileRules || []).map(rule => ({ ...rule, path: normalizeRulePath(rule.path) }));
-  // Un refus sur un dossier s'applique au dossier et à tous ses descendants.
+  // Un refus sur un dossier est absolu : il bloque le dossier et tous ses descendants.
+  // Une règle "allow" sur un fichier ou un sous-dossier ne peut pas contourner ce refus.
   const deniedByFolder = rules.some(rule =>
     rule.access === "deny" && rule.entry_type === "folder" &&
     (normalizedPath === rule.path || normalizedPath.startsWith(`${rule.path}/`))
   );
-  if (!deniedByFolder) {
-    const exact = rules.find(rule => rule.path === normalizedPath && rule.entry_type === type);
-    return exact?.access !== "deny";
-  }
-  // Seul un fichier explicitement autorisé peut faire exception à un dossier interdit.
-  if (type === "file") return rules.some(rule =>
-    rule.path === normalizedPath && rule.entry_type === "file" && rule.access === "allow"
-  );
-  // Un dossier interdit n'est navigable que s'il contient un fichier explicitement autorisé.
-  return rules.some(rule => rule.entry_type === "file" && rule.access === "allow" && rule.path.startsWith(`${normalizedPath}/`));
+  if (deniedByFolder) return false;
+
+  const exact = rules.find(rule => rule.path === normalizedPath && rule.entry_type === type);
+  return exact?.access !== "deny";
 }
 
 async function listAllObjects(prefix: string) {
