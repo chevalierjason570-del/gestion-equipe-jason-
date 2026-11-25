@@ -58,24 +58,29 @@ function safeFolderPath(value: string, allowEmpty = false) {
   return validateB2Path(value, allowEmpty);
 }
 
+function normalizeRulePath(value: string) {
+  return String(value || "").normalize("NFC").replace(/^\/+|\/+$/g, "");
+}
+
 function canAccessPath(user: { role: string; fileRules: Array<{path:string;entry_type:string;access:string}> }, path: string, type: "file" | "folder") {
   if (user.role === "admin") return true;
-  const rules = user.fileRules || [];
-  // A deny on any ancestor folder applies recursively.
+  const normalizedPath = normalizeRulePath(path);
+  const rules = (user.fileRules || []).map(rule => ({ ...rule, path: normalizeRulePath(rule.path) }));
+  // Un refus sur un dossier s'applique au dossier et à tous ses descendants.
   const deniedByFolder = rules.some(rule =>
     rule.access === "deny" && rule.entry_type === "folder" &&
-    (path === rule.path || path.startsWith(`${rule.path}/`))
+    (normalizedPath === rule.path || normalizedPath.startsWith(`${rule.path}/`))
   );
   if (!deniedByFolder) {
-    const exact = rules.find(rule => rule.path === path && rule.entry_type === type);
+    const exact = rules.find(rule => rule.path === normalizedPath && rule.entry_type === type);
     return exact?.access !== "deny";
   }
-  // Only an explicit allow on this exact file can override an ancestor-folder deny.
+  // Seul un fichier explicitement autorisé peut faire exception à un dossier interdit.
   if (type === "file") return rules.some(rule =>
-    rule.path === path && rule.entry_type === "file" && rule.access === "allow"
+    rule.path === normalizedPath && rule.entry_type === "file" && rule.access === "allow"
   );
-  // Keep a denied parent navigable only when it contains an explicitly allowed file.
-  return rules.some(rule => rule.entry_type === "file" && rule.access === "allow" && rule.path.startsWith(`${path}/`));
+  // Un dossier interdit n'est navigable que s'il contient un fichier explicitement autorisé.
+  return rules.some(rule => rule.entry_type === "file" && rule.access === "allow" && rule.path.startsWith(`${normalizedPath}/`));
 }
 
 async function listAllObjects(prefix: string) {
@@ -369,9 +374,21 @@ async function copyEntry(sourcePath: string, targetPath: string, type: "file" | 
 async function createFolderZipResponse(folderPath: string, user?: { role: string; fileRules: Array<{path:string;entry_type:string;access:string}> }): Promise<Response> {
   const s3 = getB2Client();
   const prefix = `${folderPath}/`;
-  const objects = await listAllObjects(prefix);
+  const allObjects = await listAllObjects(prefix);
+  const objects = user && user.role !== "admin"
+    ? allObjects.filter(item => {
+        const relativePath = item.Key.slice(prefix.length);
+        if (!relativePath) return false;
+        if (relativePath === ".folder" || relativePath.endsWith("/.folder")) {
+          const relativeFolder = relativePath === ".folder" ? "" : relativePath.slice(0, -"/.folder".length);
+          const fullFolderPath = relativeFolder ? `${folderPath}/${relativeFolder}` : folderPath;
+          return canAccessPath(user, fullFolderPath, "folder");
+        }
+        return canAccessPath(user, item.Key, "file");
+      })
+    : allObjects;
   if (objects.length === 0) {
-    throw new Error("Ce dossier est vide ou n'existe plus.");
+    throw new Error("Aucun élément accessible dans ce dossier, ou dossier inexistant.");
   }
 
   const rootName = folderPath.split("/").filter(Boolean).pop() || "fichiers";
@@ -446,6 +463,9 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     if (searchParams.has("downloadFolder")) {
       const folderPath = safeFolderPath(searchParams.get("downloadFolder") || "");
+      if (user.role !== "admin" && !canAccessPath(user, folderPath, "folder")) {
+        return NextResponse.json({ error: "Accès interdit à ce dossier." }, { status: 403 });
+      }
       return await createFolderZipResponse(folderPath, user);
     }
 
@@ -455,6 +475,9 @@ export async function GET(request: Request) {
     }
     const [allObjects, usedBytes] = await Promise.all([listAllObjects(""), getTotalStorageBytes()]);
     if (searchParams.get("tree") === "1") {
+      if (user.role !== "admin") {
+        return NextResponse.json({ error: "Accès administrateur obligatoire pour consulter l'arborescence complète." }, { status: 403 });
+      }
       const folders = new Set<string>();
       const files: Array<{ path: string; type: "file" | "folder" }> = [];
       const seenFiles = new Set<string>();
@@ -537,6 +560,9 @@ export async function POST(request: Request) {
       }
       if (!folder) {
         return NextResponse.json({ error: "Dossier à télécharger invalide." }, { status: 400 });
+      }
+      if (user.role !== "admin" && !canAccessPath(user, folder, "folder")) {
+        return NextResponse.json({ error: "Accès interdit à ce dossier." }, { status: 403 });
       }
       return await createFolderZipResponse(folder, user);
     }
