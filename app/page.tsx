@@ -355,6 +355,7 @@ export default function Home() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [active, setActive] = useState("accueil");
+  const [appBrandName, setAppBrandName] = useState("Gestion Équipe Jason");
   const [appAccentColor, setAppAccentColor] = useState("#2563eb");
 
   useEffect(() => {
