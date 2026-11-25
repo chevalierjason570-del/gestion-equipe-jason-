@@ -604,6 +604,22 @@ const [showFileTools, setShowFileTools] = useState(false);
     }
   }, [user, active]);
 
+  async function loadRoleMessagingSelection(roleKey?: string) {
+    setLoadingMessagingRules(true);
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) throw new Error("Session expirée. Reconnecte-toi.");
+      const endpoint = roleKey ? `/api/admin/roles/messaging-users?roleKey=${encodeURIComponent(roleKey)}` : "/api/admin/roles/messaging-users";
+      const response = await fetch(endpoint, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Chargement des utilisateurs impossible.");
+      setMessagingRoleUsers(result.users || []);
+      setMessagingAllowedIds(result.allowedUserIds || []);
+    } catch (err) { setRoleError(err instanceof Error ? err.message : "Erreur de chargement des utilisateurs."); }
+    finally { setLoadingMessagingRules(false); }
+  }
+
   function startEditRole(role: RoleDefinition) {
     if (role.role_key === "admin") return;
     setEditingRoleId(role.id);
@@ -611,6 +627,8 @@ const [showFileTools, setShowFileTools] = useState(false);
     setRolePermissions(role.permissions || []);
     setRoleFileRulesText("");
     setRoleError(""); setRoleSuccess("");
+    if ((role.permissions || []).includes("messages")) void loadRoleMessagingSelection(role.role_key);
+    else { setMessagingRoleUsers([]); setMessagingAllowedIds([]); }
     setLoadingRoleFileEntries(true);
     void (async () => {
       try {
@@ -698,8 +716,15 @@ const [showFileTools, setShowFileTools] = useState(false);
       });
       const rulesResult = await rulesResponse.json();
       if (!rulesResponse.ok) throw new Error(rulesResult.error || "Le rôle est enregistré, mais ses règles de fichiers ne le sont pas.");
-      setRoleSuccess(editingRoleId ? "Rôle modifié avec ses droits fichiers." : "Rôle créé avec ses droits fichiers.");
+      const messagingResponse = await fetch("/api/admin/roles/messaging-users", {
+        method: "PUT", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ roleKey: savedRole.role_key, userIds: rolePermissions.includes("messages") ? messagingAllowedIds : [] }),
+      });
+      const messagingResult = await messagingResponse.json();
+      if (!messagingResponse.ok) throw new Error(messagingResult.error || "Le rôle est enregistré, mais les autorisations de messagerie ne le sont pas.");
+      setRoleSuccess(editingRoleId ? "Rôle modifié avec ses droits fichiers et de messagerie." : "Rôle créé avec ses droits fichiers et de messagerie.");
       setRoleName(""); setRolePermissions(["accueil"]); setEditingRoleId(""); setRoleFileRulesText(""); setRoleFileDenied({});
+      setMessagingAllowedIds([]); setMessagingRoleUsers([]);
       await loadRoles();
     } catch (err) { setRoleError(err instanceof Error ? err.message : "Erreur d'enregistrement."); }
     finally { setSavingRole(false); }
@@ -1795,10 +1820,37 @@ async function uploadFolder() {
           <p style={{ color: "#64748b", fontSize: 13 }}>Choisis les rubriques visibles pour les utilisateurs de ce rôle.</p>
           {permissionOptions.map(option => (
             <label key={option.id} style={{ display: "flex", alignItems: "center", gap: 10, margin: "12px 0" }}>
-              <input type="checkbox" checked={rolePermissions.includes(option.id)} onChange={e => setRolePermissions(current => e.target.checked ? [...current, option.id] : current.filter(value => value !== option.id))} />
+              <input type="checkbox" checked={rolePermissions.includes(option.id)} onChange={e => {
+                const checked = e.target.checked;
+                setRolePermissions(current => checked ? [...current, option.id] : current.filter(value => value !== option.id));
+                if (option.id === "messages") {
+                  if (checked) void loadRoleMessagingSelection(editingRoleId ? roles.find(item => item.id === editingRoleId)?.role_key : undefined);
+                  else { setMessagingAllowedIds([]); setMessagingRoleUsers([]); }
+                }
+              }} />
               {option.label}
             </label>
           ))}
+          {rolePermissions.includes("messages") && (
+            <div style={{ marginTop: 16, padding: 14, border: "1px solid #bfdbfe", background: "#f8fbff", borderRadius: 10 }}>
+              <strong>💬 Utilisateurs autorisés dans la messagerie</strong>
+              <p style={{ color: "#64748b", fontSize: 13, margin: "6px 0 10px" }}>Sélectionne les utilisateurs avec lesquels les membres de ce rôle pourront échanger des messages. La règle s'applique dans les deux sens.</p>
+              {loadingMessagingRules ? <p>Chargement des utilisateurs…</p> : <>
+                <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 8, fontSize: 13 }}>
+                  <strong>{messagingAllowedIds.length} autorisé(s)</strong>
+                  <button type="button" onClick={() => setMessagingAllowedIds(messagingRoleUsers.map(person => person.id))} style={{ border: 0, background: "transparent", color: "#2563eb", cursor: "pointer" }}>Tout cocher</button>
+                  <button type="button" onClick={() => setMessagingAllowedIds([])} style={{ border: 0, background: "transparent", color: "#dc2626", cursor: "pointer" }}>Tout décocher</button>
+                </div>
+                <div style={{ border: "1px solid #e2e8f0", borderRadius: 8, maxHeight: 260, overflowY: "auto", padding: "4px 10px", background: "white" }}>
+                  {messagingRoleUsers.map(person => <label key={person.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 2px", borderBottom: "1px solid #f1f5f9", cursor: "pointer" }}>
+                    <input type="checkbox" checked={messagingAllowedIds.includes(person.id)} onChange={event => setMessagingAllowedIds(current => event.target.checked ? [...current, person.id] : current.filter(id => id !== person.id))} />
+                    <span><strong>{person.display_name || person.username}</strong><small style={{ display: "block", color: "#64748b" }}>@{person.username} · {person.role}</small></span>
+                  </label>)}
+                  {!messagingRoleUsers.length && <p style={{ color: "#64748b" }}>Aucun utilisateur disponible.</p>}
+                </div>
+              </>}
+            </div>
+          )}
           <strong style={{ display: "block", marginTop: 18 }}>Accès aux dossiers et fichiers</strong>
           <p style={{ color: "#64748b", fontSize: 13 }}>Une règle par ligne au format <code>deny|folder|Documents/Confidentiel</code> ou <code>allow|file|Documents/Confidentiel/rapport.pdf</code>. Un refus sur un dossier s'applique à son contenu. Une autorisation explicite sur un fichier constitue une exception.</p>
           <div style={{ border: "1px solid #cbd5e1", borderRadius: 8, padding: 12, maxHeight: 420, overflowY: "auto", marginTop: 8 }}>
@@ -1815,7 +1867,7 @@ async function uploadFolder() {
           </div>
           <p style={{ color: "#64748b", fontSize: 12 }}>Coché = interdit et invisible. Un dossier interdit masque son contenu. Décoche un fichier pour créer une exception d'accès s'il se trouve dans un dossier interdit.</p>
           <button disabled={savingRole} style={{ width: "100%", padding: 12, marginTop: 12, background: "#2563eb", color: "white", border: 0, borderRadius: 8, cursor: "pointer" }}>{savingRole ? "Enregistrement..." : editingRoleId ? "Enregistrer les modifications" : "Créer le rôle"}</button>
-          {editingRoleId && <button type="button" onClick={() => { setEditingRoleId(""); setRoleName(""); setRolePermissions(["accueil"]); setRoleFileRulesText(""); setRoleFileDenied({}); }} style={{ width: "100%", padding: 10, marginTop: 8, border: "1px solid #cbd5e1", borderRadius: 8, background: "white" }}>Annuler</button>}
+          {editingRoleId && <button type="button" onClick={() => { setEditingRoleId(""); setRoleName(""); setRolePermissions(["accueil"]); setRoleFileRulesText(""); setRoleFileDenied({}); setMessagingAllowedIds([]); setMessagingRoleUsers([]); }} style={{ width: "100%", padding: 10, marginTop: 8, border: "1px solid #cbd5e1", borderRadius: 8, background: "white" }}>Annuler</button>}
         </form>
         {roleError && <p style={{ color: "#dc2626" }}>{roleError}</p>}
         {roleSuccess && <p style={{ color: "#15803d" }}>{roleSuccess}</p>}
