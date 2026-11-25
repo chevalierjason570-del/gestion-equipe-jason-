@@ -1411,7 +1411,6 @@ async function uploadFolder() {
           width: "100%",
           maxWidth: 380
         }}>
-          <h1 style={{ color: "#172554" }}>{appBrandName}</h1>
           <p>Connexion à votre compte</p>
 
           <label>Identifiant</label>
