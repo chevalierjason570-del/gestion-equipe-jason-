@@ -456,20 +456,44 @@ export async function GET(request: Request) {
     const [allObjects, usedBytes] = await Promise.all([listAllObjects(""), getTotalStorageBytes()]);
     if (searchParams.get("tree") === "1") {
       const folders = new Set<string>();
-      const files: Array<{path:string;type:"file"|"folder"}> = [];
+      const files: Array<{ path: string; type: "file" | "folder" }> = [];
+      const seenFiles = new Set<string>();
+
       for (const object of allObjects) {
-        const key = object.Key;
-        if (key.endsWith("/.folder")) {
-         const dir = key.slice(0, -7).replace(/\/$/, "");
-          if (dir) folders.add(dir);
-        } else {
-          files.push({ path: key, type: "file" });
+        // Les dossiers B2 peuvent être représentés par un objet marqueur
+        // "chemin/du/dossier/.folder" ou par des objets placés dessous.
+        const rawKey = String(object.Key || "");
+        const isFolderObject = rawKey.endsWith("/");
+        const key = rawKey.replace(/^\\/+|\\/+$/g, "");
+        if (!key) continue;
+
+        const segments = key.split("/").filter(Boolean);
+        if (!segments.length) continue;
+
+        const isFolderMarker = segments[segments.length - 1] === ".folder";
+        const folderSegments = isFolderMarker || isFolderObject
+          ? segments.slice(0, isFolderMarker ? -1 : undefined)
+          : segments.slice(0, -1);
+
+        // Ajouter chaque niveau parent : cela inclut les dossiers intermédiaires
+        // même lorsqu'ils ne possèdent qu'un marqueur .folder.
+        for (let i = 1; i <= folderSegments.length; i++) {
+          folders.add(folderSegments.slice(0, i).join("/"));
         }
-        const parts = key.split("/");
-        for (let i = 1; i < parts.length - (key.endsWith("/.folder") ? 2 : 1); i++) folders.add(parts.slice(0, i).join("/"));
+
+        if (!isFolderMarker && !isFolderObject && segments[segments.length - 1] !== ".folder") {
+          if (!seenFiles.has(key)) {
+            seenFiles.add(key);
+            files.push({ path: key, type: "file" });
+          }
+        }
       }
+
       for (const path of folders) files.push({ path, type: "folder" });
-      return NextResponse.json({ entries: files.sort((a,b)=>a.path.localeCompare(b.path,"fr")), role:user.role }, { headers: { "Cache-Control": "no-store" } });
+      return NextResponse.json(
+        { entries: files.sort((a, b) => a.path.localeCompare(b.path, "fr")), role: user.role },
+        { headers: { "Cache-Control": "no-store" } }
+      );
     }
     let files = await listFolderEntries(folder);
     if (user.role !== "admin") files = files.filter(item => canAccessPath(user, item.path, item.type));
