@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { unzipSync, strFromU8 } from "fflate";
-import { supabase } from "@/lib/supabase";
 
 type Props = { path: string; fileName: string; onClose: () => void };
 type Block = { type: "p" | "h" | "table" | "list"; text?: string; level?: number; rows?: string[][]; items?: string[] };
@@ -53,19 +52,16 @@ export default function OdtPreview({ path, fileName, onClose }: Props) {
     let cancelled = false;
     (async () => {
       try {
-        const { data: sessionData } = await supabase.auth.getSession();
+        const { data: sessionData } = await (await import("@/lib/supabase")).supabase.auth.getSession();
         const accessToken = sessionData.session?.access_token;
         if (!accessToken) throw new Error("Ta session a expiré. Reconnecte-toi puis réessaie.");
-
-        // L'API du site sert le fichier : pas de dépendance au CORS B2
-        // ni aux URL pré-signées qui expirent.
         const response = await fetch(`/api/admin/files?preview=${encodeURIComponent(path)}`, {
           headers: { Authorization: `Bearer ${accessToken}` },
           cache: "no-store",
         });
         if (!response.ok) {
-          const data = await response.json().catch(() => null);
-          throw new Error(data?.error || `Impossible de récupérer le document (${response.status}).`);
+          const result = await response.json().catch(() => null);
+          throw new Error(result?.error || `Impossible de récupérer le document (${response.status}).`);
         }
         const buffer = new Uint8Array(await response.arrayBuffer());
         const archive = unzipSync(buffer);
