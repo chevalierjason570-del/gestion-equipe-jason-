@@ -14,7 +14,7 @@ export const runtime = "nodejs";
 type RouteContext = { params: Promise<{ conversationId: string }> };
 
 function safeDispositionName(name: string) {
-  return encodeURIComponent(name).replace(/'/g, "%27");
+  return encodeURIComponent(name).replace(/['()*!]/g, char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
 export async function GET(request: Request, context: RouteContext) {
