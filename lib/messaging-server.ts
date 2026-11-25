@@ -51,28 +51,26 @@ export async function getConversationForUser(conversationId: string, user: Messa
     .select("id, user_a, user_b, created_at, last_message_at")
     .eq("id", conversationId)
     .maybeSingle();
+
   if (error) throw new Error("Impossible de vérifier la conversation.");
   if (!data || (data.user_a !== user.id && data.user_b !== user.id)) return null;
 
   const otherUserId = data.user_a === user.id ? data.user_b : data.user_a;
-  const { data: otherProfile, error: otherError } = await messagingSupabase
-    .from("profiles").select("id, role").eq("id", otherUserId).maybeSingle();
-  if (otherError || !otherProfile) return null;
+  const { data: otherProfile, error: otherProfileError } = await messagingSupabase
+    .from("profiles")
+    .select("id, role")
+    .eq("id", otherUserId)
+    .maybeSingle();
 
-  // L'accès est autorisé si l'un des deux utilisateurs est membre d'un rôle
-  // ayant explicitement sélectionné l'autre comme contact. Cela permet au
-  // contact sélectionné de répondre, sans lui ouvrir d'autres conversations.
-  const { data: currentProfile } = await messagingSupabase
-    .from("profiles").select("id, role").eq("id", user.id).maybeSingle();
-  if (!currentProfile) return null;
-  const checks = await Promise.all([
-    currentProfile.role !== "admin"
-      ? messagingSupabase.from("role_messaging_users").select("user_id").eq("role_key", currentProfile.role).eq("user_id", otherUserId).maybeSingle()
-      : Promise.resolve({ data: { user_id: otherUserId }, error: null }),
-    otherProfile.role !== "admin"
-      ? messagingSupabase.from("role_messaging_users").select("user_id").eq("role_key", otherProfile.role).eq("user_id", user.id).maybeSingle()
-      : Promise.resolve({ data: null, error: null }),
+  if (otherProfileError || !otherProfile) return null;
+  // Une conversation est autorisée si l'un des deux participants a été
+  // sélectionné dans la liste de contacts de son rôle. La règle est symétrique :
+  // une fois ouverte, les deux personnes peuvent répondre.
+  const [{ data: userAllowsOther, error: firstError }, { data: otherAllowsUser, error: secondError }] = await Promise.all([
+    messagingSupabase.from("role_messaging_users").select("user_id").eq("role_key", user.role).eq("user_id", otherUserId).maybeSingle(),
+    messagingSupabase.from("role_messaging_users").select("user_id").eq("role_key", String(otherProfile.role)).eq("user_id", user.id).maybeSingle(),
   ]);
-  if (checks.some(result => result.error) || !checks.some(result => result.data)) return null;
+  if (firstError || secondError || (!userAllowsOther && !otherAllowsUser)) return null;
+
   return data;
 }
