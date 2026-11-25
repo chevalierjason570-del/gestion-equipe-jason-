@@ -464,7 +464,7 @@ export async function GET(request: Request) {
         // "chemin/du/dossier/.folder" ou par des objets placés dessous.
         const rawKey = String(object.Key || "");
         const isFolderObject = rawKey.endsWith("/");
-        const key = rawKey.replace(/^\\/+|\\/+$/g, "");
+        const key = rawKey.replace(/^\/+|\/+$/g, "");
         if (!key) continue;
 
         const segments = key.split("/").filter(Boolean);
