@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import {
   authenticateMessagingRequest,
+  getConversationForUser,
   messagingSupabase,
   orderedUserPair,
   isUuid,
@@ -40,38 +41,28 @@ export async function GET(request: Request) {
 
   const isAdmin = user.role === "admin";
 
-  // Administrateur : afficher tous les membres. Membre : afficher uniquement l'administrateur.
+  // L'administrateur voit tous les utilisateurs. Un membre voit uniquement
+  // les personnes explicitement sélectionnées pour son rôle.
   let contactsQuery = messagingSupabase
     .from("profiles")
     .select("id, username, display_name, role")
     .neq("id", user.id)
     .order("display_name", { ascending: true });
-
-  contactsQuery = isAdmin
-    ? contactsQuery.neq("role", "admin")
-    : contactsQuery.eq("role", "admin");
-
-  const { data: initialContacts, error: contactsError } = await contactsQuery;
-  let contacts = initialContacts || [];
-  if (contactsError) {
-    return NextResponse.json({
-      error: describeDatabaseError("Impossible de charger la liste des utilisateurs", contactsError),
-      databaseCode: contactsError.code || null,
-    }, { status: 500 });
-  }
-
-  // Filtrage des contacts selon les autorisations individuelles configurées pour chaque rôle.
-  const contactRows = contacts || [];
-  if (isAdmin && contactRows.length) {
-    const roleKeys = [...new Set(contactRows.map(contact => contact.role).filter(Boolean))];
-    const { data: rules, error: rulesError } = await messagingSupabase.from("role_messaging_users").select("role_key, user_id").in("role_key", roleKeys);
+  let contacts: any[] = [];
+  if (isAdmin) {
+    const { data, error } = await contactsQuery;
+    if (error) return NextResponse.json({ error: describeDatabaseError("Impossible de charger la liste des utilisateurs", error), databaseCode: error.code || null }, { status: 500 });
+    contacts = data || [];
+  } else {
+    const { data: rules, error: rulesError } = await messagingSupabase
+      .from("role_messaging_users").select("user_id").eq("role_key", user.role);
     if (rulesError) return NextResponse.json({ error: "Les règles de messagerie par rôle ne sont pas installées. Exécute supabase/role-messaging-users.sql." }, { status: 503 });
-    const allowed = new Set((rules || []).map(row => `${row.role_key}:${row.user_id}`));
-    contacts = contactRows.filter(contact => allowed.has(`${contact.role}:${contact.id}`));
-  } else if (!isAdmin) {
-    const { data: rules, error: rulesError } = await messagingSupabase.from("role_messaging_users").select("user_id").eq("role_key", user.role).eq("user_id", user.id).maybeSingle();
-    if (rulesError) return NextResponse.json({ error: "Les règles de messagerie par rôle ne sont pas installées. Exécute supabase/role-messaging-users.sql." }, { status: 503 });
-    if (!rules) contacts = [];
+    const allowedIds = (rules || []).map(row => row.user_id).filter(id => id !== user.id);
+    if (allowedIds.length) {
+      const { data, error } = await contactsQuery.in("id", allowedIds);
+      if (error) return NextResponse.json({ error: describeDatabaseError("Impossible de charger les contacts autorisés", error), databaseCode: error.code || null }, { status: 500 });
+      contacts = data || [];
+    }
   }
 
   const { data: candidateConversations, error: conversationsError } = await messagingSupabase
@@ -95,11 +86,22 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: warning, databaseCode: conversationsError.code || null }, { status: 500 });
   }
 
-  const allowedContactIds = new Set((contacts || []).map(contact => contact.id));
-  const conversations = (candidateConversations || []).filter(conversation => {
-    const otherId = conversation.user_a === user.id ? conversation.user_b : conversation.user_a;
-    return allowedContactIds.has(otherId);
-  });
+  // Inclure aussi les conversations déjà ouvertes par une personne qui a été
+  // autorisée à contacter ce membre, afin que celui-ci puisse lui répondre.
+  const accessibleConversations = await Promise.all((candidateConversations || []).map(async conversation => {
+    const allowed = await getConversationForUser(conversation.id, user);
+    return allowed ? conversation : null;
+  }));
+  const conversations = accessibleConversations.filter(Boolean) as NonNullable<typeof candidateConversations>[number][];
+  const contactIds = new Set((contacts || []).map(contact => contact.id));
+  const missingContactIds = conversations
+    .map(conversation => conversation.user_a === user.id ? conversation.user_b : conversation.user_a)
+    .filter(id => !contactIds.has(id));
+  if (missingContactIds.length) {
+    const { data: existingCounterparts } = await messagingSupabase
+      .from("profiles").select("id, username, display_name, role").in("id", missingContactIds);
+    contacts = [...contacts, ...(existingCounterparts || [])];
+  }
 
   const conversationIds = conversations.map(item => item.id);
   let lastMessages: any[] = [];
@@ -194,18 +196,12 @@ export async function POST(request: Request) {
     if (targetError || !target) return NextResponse.json({ error: "Utilisateur introuvable." }, { status: 404 });
 
     const userIsAdmin = user.role === "admin";
-    const permissionRole = userIsAdmin ? target.role : user.role;
-    const permissionUserId = userIsAdmin ? targetUserId : user.id;
-    const { data: permission, error: permissionError } = await messagingSupabase.from("role_messaging_users").select("user_id").eq("role_key", permissionRole).eq("user_id", permissionUserId).maybeSingle();
-    if (permissionError) return NextResponse.json({ error: "Les règles de messagerie par rôle ne sont pas installées." }, { status: 503 });
-    if (!permission) return NextResponse.json({ error: "La messagerie avec cet utilisateur n'est pas autorisée pour ce rôle." }, { status: 403 });
-    const targetIsAdmin = target.role === "admin";
-    if (userIsAdmin === targetIsAdmin) {
-      return NextResponse.json({
-        error: userIsAdmin
-          ? "Un administrateur peut démarrer une conversation uniquement avec un membre."
-          : "Tu peux uniquement démarrer une conversation privée avec l'administrateur.",
-      }, { status: 403 });
+    if (!userIsAdmin) {
+      const { data: permission, error: permissionError } = await messagingSupabase
+        .from("role_messaging_users").select("user_id")
+        .eq("role_key", user.role).eq("user_id", targetUserId).maybeSingle();
+      if (permissionError) return NextResponse.json({ error: "Les règles de messagerie par rôle ne sont pas installées." }, { status: 503 });
+      if (!permission) return NextResponse.json({ error: "Cette personne n'est pas autorisée dans la messagerie de ton rôle." }, { status: 403 });
     }
 
     const [userA, userB] = orderedUserPair(user.id, targetUserId);
