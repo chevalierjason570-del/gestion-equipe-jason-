@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import {
   authenticateMessagingRequest,
-  getConversationForUser,
   messagingSupabase,
   orderedUserPair,
   isUuid,
@@ -41,26 +40,32 @@ export async function GET(request: Request) {
 
   const isAdmin = user.role === "admin";
 
-  // L'administrateur voit tous les utilisateurs. Un membre voit uniquement
-  // les personnes explicitement sélectionnées pour son rôle.
-  let contactsQuery = messagingSupabase
-    .from("profiles")
-    .select("id, username, display_name, role")
-    .neq("id", user.id)
-    .order("display_name", { ascending: true });
+  // Les administrateurs voient les comptes membres. Chaque membre voit les contacts
+  // explicitement sélectionnés pour son rôle dans role_messaging_users.
   let contacts: any[] = [];
   if (isAdmin) {
-    const { data, error } = await contactsQuery;
-    if (error) return NextResponse.json({ error: describeDatabaseError("Impossible de charger la liste des utilisateurs", error), databaseCode: error.code || null }, { status: 500 });
+    const { data, error } = await messagingSupabase
+      .from("profiles")
+      .select("id, username, display_name, role")
+      .neq("id", user.id)
+      .neq("role", "admin")
+      .order("display_name", { ascending: true });
+    if (error) return NextResponse.json({ error: describeDatabaseError("Impossible de charger la liste des utilisateurs", error) }, { status: 500 });
     contacts = data || [];
   } else {
     const { data: rules, error: rulesError } = await messagingSupabase
-      .from("role_messaging_users").select("user_id").eq("role_key", user.role);
+      .from("role_messaging_users")
+      .select("user_id")
+      .eq("role_key", user.role);
     if (rulesError) return NextResponse.json({ error: "Les règles de messagerie par rôle ne sont pas installées. Exécute supabase/role-messaging-users.sql." }, { status: 503 });
-    const allowedIds = (rules || []).map(row => row.user_id).filter(id => id !== user.id);
+    const allowedIds = [...new Set((rules || []).map(row => row.user_id).filter((id: string) => id !== user.id))];
     if (allowedIds.length) {
-      const { data, error } = await contactsQuery.in("id", allowedIds);
-      if (error) return NextResponse.json({ error: describeDatabaseError("Impossible de charger les contacts autorisés", error), databaseCode: error.code || null }, { status: 500 });
+      const { data, error } = await messagingSupabase
+        .from("profiles")
+        .select("id, username, display_name, role")
+        .in("id", allowedIds)
+        .order("display_name", { ascending: true });
+      if (error) return NextResponse.json({ error: describeDatabaseError("Impossible de charger les contacts autorisés", error) }, { status: 500 });
       contacts = data || [];
     }
   }
@@ -86,22 +91,11 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: warning, databaseCode: conversationsError.code || null }, { status: 500 });
   }
 
-  // Inclure aussi les conversations déjà ouvertes par une personne qui a été
-  // autorisée à contacter ce membre, afin que celui-ci puisse lui répondre.
-  const accessibleConversations = await Promise.all((candidateConversations || []).map(async conversation => {
-    const allowed = await getConversationForUser(conversation.id, user);
-    return allowed ? conversation : null;
-  }));
-  const conversations = accessibleConversations.filter(Boolean) as NonNullable<typeof candidateConversations>[number][];
-  const contactIds = new Set((contacts || []).map(contact => contact.id));
-  const missingContactIds = conversations
-    .map(conversation => conversation.user_a === user.id ? conversation.user_b : conversation.user_a)
-    .filter(id => !contactIds.has(id));
-  if (missingContactIds.length) {
-    const { data: existingCounterparts } = await messagingSupabase
-      .from("profiles").select("id, username, display_name, role").in("id", missingContactIds);
-    contacts = [...contacts, ...(existingCounterparts || [])];
-  }
+  const allowedContactIds = new Set((contacts || []).map(contact => contact.id));
+  const conversations = (candidateConversations || []).filter(conversation => {
+    const otherId = conversation.user_a === user.id ? conversation.user_b : conversation.user_a;
+    return allowedContactIds.has(otherId);
+  });
 
   const conversationIds = conversations.map(item => item.id);
   let lastMessages: any[] = [];
@@ -195,14 +189,14 @@ export async function POST(request: Request) {
       .maybeSingle();
     if (targetError || !target) return NextResponse.json({ error: "Utilisateur introuvable." }, { status: 404 });
 
-    const userIsAdmin = user.role === "admin";
-    if (!userIsAdmin) {
-      const { data: permission, error: permissionError } = await messagingSupabase
-        .from("role_messaging_users").select("user_id")
-        .eq("role_key", user.role).eq("user_id", targetUserId).maybeSingle();
-      if (permissionError) return NextResponse.json({ error: "Les règles de messagerie par rôle ne sont pas installées." }, { status: 503 });
-      if (!permission) return NextResponse.json({ error: "Cette personne n'est pas autorisée dans la messagerie de ton rôle." }, { status: 403 });
-    }
+    // L'un des deux rôles doit avoir explicitement autorisé l'autre utilisateur.
+    // Cette règle permet à tous les membres d'un rôle d'utiliser la même liste.
+    const [{ data: userAllowsTarget, error: firstPermissionError }, { data: targetAllowsUser, error: secondPermissionError }] = await Promise.all([
+      messagingSupabase.from("role_messaging_users").select("user_id").eq("role_key", user.role).eq("user_id", targetUserId).maybeSingle(),
+      messagingSupabase.from("role_messaging_users").select("user_id").eq("role_key", String(target.role)).eq("user_id", user.id).maybeSingle(),
+    ]);
+    if (firstPermissionError || secondPermissionError) return NextResponse.json({ error: "Les règles de messagerie par rôle ne sont pas installées. Vérifie supabase/role-messaging-users.sql." }, { status: 503 });
+    if (!userAllowsTarget && !targetAllowsUser) return NextResponse.json({ error: "La messagerie avec cet utilisateur n'est autorisée par aucun des deux rôles." }, { status: 403 });
 
     const [userA, userB] = orderedUserPair(user.id, targetUserId);
     const { data: existing, error: existingError } = await messagingSupabase
