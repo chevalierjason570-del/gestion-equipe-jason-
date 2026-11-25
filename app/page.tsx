@@ -389,6 +389,8 @@ export default function Home() {
   const [roleFileRulesText, setRoleFileRulesText] = useState("");
   const [roleFileEntries, setRoleFileEntries] = useState<RoleFileEntry[]>([]);
   const [roleFileDenied, setRoleFileDenied] = useState<Record<string, boolean>>({});
+  const [roleFileCurrentFolder, setRoleFileCurrentFolder] = useState("");
+  const [roleFileSelectedEntry, setRoleFileSelectedEntry] = useState<RoleFileEntry | null>(null);
   const [loadingRoleFileEntries, setLoadingRoleFileEntries] = useState(false);
   const [savingRole, setSavingRole] = useState(false);
   const [messagingRole, setMessagingRole] = useState<RoleDefinition | null>(null);
@@ -626,6 +628,7 @@ const [showFileTools, setShowFileTools] = useState(false);
     setRoleName(role.name);
     setRolePermissions(role.permissions || []);
     setRoleFileRulesText("");
+    setRoleFileCurrentFolder(""); setRoleFileSelectedEntry(null);
     setRoleError(""); setRoleSuccess("");
     if ((role.permissions || []).includes("messages")) void loadRoleMessagingSelection(role.role_key);
     else { setMessagingRoleUsers([]); setMessagingAllowedIds([]); }
@@ -1853,21 +1856,53 @@ async function uploadFolder() {
           )}
           <strong style={{ display: "block", marginTop: 18 }}>Accès aux dossiers et fichiers</strong>
           <p style={{ color: "#64748b", fontSize: 13 }}>Une règle par ligne au format <code>deny|folder|Documents/Confidentiel</code> ou <code>allow|file|Documents/Confidentiel/rapport.pdf</code>. Un refus sur un dossier s'applique à son contenu. Une autorisation explicite sur un fichier constitue une exception.</p>
-          <div style={{ border: "1px solid #cbd5e1", borderRadius: 8, padding: 12, maxHeight: 420, overflowY: "auto", marginTop: 8 }}>
-            {loadingRoleFileEntries ? <p>Chargement des dossiers et fichiers...</p> : roleFileEntries.length === 0 ? <p style={{ color: "#64748b" }}>Aucun fichier trouvé dans le stockage.</p> : roleFileEntries.map(entry => {
-              const depth = entry.path.split("/").length - 1;
-              const name = entry.path.split("/").pop() || entry.path;
-              const key = `${entry.type}:${entry.path}`;
-              return <label key={key} style={{ display: "flex", alignItems: "center", gap: 9, padding: "7px 4px", paddingLeft: 8 + depth * 18, borderBottom: "1px solid #f1f5f9", cursor: "pointer" }}>
-                <input type="checkbox" checked={!!roleFileDenied[key]} onChange={e => setRoleFileDenied(current => ({ ...current, [key]: e.target.checked }))} />
-                <span>{entry.type === "folder" ? "📁" : "📄"} {name}</span>
-                <span style={{ marginLeft: "auto", fontSize: 11, color: roleFileDenied[key] ? "#dc2626" : "#15803d" }}>{roleFileDenied[key] ? "Interdit / invisible" : "Autorisé"}</span>
-              </label>;
-            })}
+          <div style={{ border: "1px solid #dbe3ee", borderRadius: 10, overflow: "hidden", marginTop: 8, background: "#fff" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", padding: "9px 10px", background: "#172033", color: "white" }}>
+              <button type="button" title="Dossier précédent" onClick={() => { setRoleFileCurrentFolder(current => current.split("/").slice(0, -1).join("/")); setRoleFileSelectedEntry(null); }} disabled={!roleFileCurrentFolder} style={{ border: "1px solid #465268", background: "#263247", color: "white", borderRadius: 7, padding: "5px 9px", cursor: roleFileCurrentFolder ? "pointer" : "not-allowed" }}>←</button>
+              <button type="button" title="Accueil" onClick={() => { setRoleFileCurrentFolder(""); setRoleFileSelectedEntry(null); }} style={{ border: "1px solid #465268", background: "#263247", color: "white", borderRadius: 7, padding: "5px 9px", cursor: "pointer" }}>⌂</button>
+              <div style={{ flex: 1, minWidth: 140, padding: "7px 10px", borderRadius: 7, background: "#263247", color: "#e2e8f0", fontSize: 12, overflowWrap: "anywhere" }}>
+                <button type="button" onClick={() => { setRoleFileCurrentFolder(""); setRoleFileSelectedEntry(null); }} style={{ border: 0, background: "transparent", color: "inherit", padding: 0, cursor: "pointer" }}>Fichiers partagés</button>
+                {roleFileCurrentFolder.split("/").filter(Boolean).map((part, index, parts) => <span key={`${part}-${index}`}>　›　<button type="button" onClick={() => { setRoleFileCurrentFolder(parts.slice(0, index + 1).join("/")); setRoleFileSelectedEntry(null); }} style={{ border: 0, background: "transparent", color: "inherit", padding: 0, cursor: "pointer" }}>{part}</button></span>)}
+              </div>
+            </div>
+            {loadingRoleFileEntries ? <p style={{ padding: 18, color: "#64748b" }}>Chargement des dossiers et fichiers...</p> : roleFileEntries.length === 0 ? <p style={{ padding: 18, color: "#64748b" }}>Aucun fichier trouvé dans le stockage.</p> : <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(135px, 185px)", minWidth: 0 }}>
+              <div style={{ minWidth: 0, overflowX: "auto" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "minmax(180px, 1fr) 85px 115px", gap: 6, padding: "9px 10px", background: "#f8fafc", borderBottom: "1px solid #e2e8f0", fontSize: 11, fontWeight: 700, color: "#475569", minWidth: 390 }}><span>Nom</span><span>Type</span><span>Accès</span></div>
+                {roleFileEntries.filter(entry => {
+                  const parent = entry.path.includes("/") ? entry.path.slice(0, entry.path.lastIndexOf("/")) : "";
+                  return parent === roleFileCurrentFolder;
+                }).sort((a, b) => a.type === b.type ? a.path.localeCompare(b.path, "fr") : a.type === "folder" ? -1 : 1).map(entry => {
+                  const name = entry.path.split("/").pop() || entry.path;
+                  const key = `${entry.type}:${entry.path}`;
+                  const denied = !!roleFileDenied[key];
+                  const selected = roleFileSelectedEntry?.path === entry.path;
+                  return <div key={key} onClick={() => setRoleFileSelectedEntry(entry)} onDoubleClick={() => entry.type === "folder" && (setRoleFileCurrentFolder(entry.path), setRoleFileSelectedEntry(null))} style={{ display: "grid", gridTemplateColumns: "minmax(180px, 1fr) 85px 115px", gap: 6, alignItems: "center", padding: "9px 10px", borderBottom: "1px solid #edf1f6", background: selected ? "#dbeafe" : "white", cursor: "pointer", fontSize: 12, minWidth: 390 }}>
+                    <span style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
+                      <input aria-label={`${denied ? "Interdire" : "Autoriser"} ${name}`} type="checkbox" checked={denied} onClick={event => event.stopPropagation()} onChange={event => setRoleFileDenied(current => ({ ...current, [key]: event.target.checked }))} />
+                      <span>{entry.type === "folder" ? "📁" : "📄"}</span><span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</span>
+                    </span>
+                    <span style={{ color: "#64748b" }}>{entry.type === "folder" ? "Dossier" : "Fichier"}</span>
+                    <span style={{ color: denied ? "#dc2626" : "#15803d", fontWeight: 600 }}>{denied ? "Interdit" : "Autorisé"}</span>
+                  </div>;
+                })}
+                {!roleFileEntries.some(entry => (entry.path.includes("/") ? entry.path.slice(0, entry.path.lastIndexOf("/")) : "") === roleFileCurrentFolder) && <p style={{ padding: 16, color: "#64748b", fontSize: 12 }}>Ce dossier est vide.</p>}
+              </div>
+              <aside style={{ background: "#f8fafc", borderLeft: "1px solid #dbe3ee", padding: 10, minWidth: 0 }}>
+                {roleFileSelectedEntry ? <>
+                  <div style={{ textAlign: "center", fontSize: 42, padding: "6px 0" }}>{roleFileSelectedEntry.type === "folder" ? "📁" : "📄"}</div>
+                  <strong style={{ display: "block", fontSize: 12, overflowWrap: "anywhere" }}>{roleFileSelectedEntry.path.split("/").pop()}</strong>
+                  <p style={{ color: "#64748b", fontSize: 11 }}>{roleFileSelectedEntry.type === "folder" ? "Dossier" : "Fichier"}</p>
+                  <p style={{ color: "#64748b", fontSize: 10, overflowWrap: "anywhere" }}>Chemin : {roleFileSelectedEntry.path}</p>
+                  {roleFileSelectedEntry.type === "folder" && <button type="button" onClick={() => { setRoleFileCurrentFolder(roleFileSelectedEntry.path); setRoleFileSelectedEntry(null); }} style={{ width: "100%", padding: "7px 5px", border: "1px solid #dbe3ee", borderRadius: 6, background: "white", cursor: "pointer", fontSize: 11 }}>📂 Ouvrir</button>}
+                  <label style={{ display: "flex", alignItems: "flex-start", gap: 6, marginTop: 10, fontSize: 11, cursor: "pointer" }}><input type="checkbox" checked={!!roleFileDenied[`${roleFileSelectedEntry.type}:${roleFileSelectedEntry.path}`]} onChange={event => setRoleFileDenied(current => ({ ...current, [`${roleFileSelectedEntry.type}:${roleFileSelectedEntry.path}`]: event.target.checked }))} /> Interdire l'accès</label>
+                </> : <div style={{ textAlign: "center", color: "#64748b", paddingTop: 22 }}><div style={{ fontSize: 38 }}>📁</div><strong style={{ fontSize: 11 }}>Détails</strong><p style={{ fontSize: 10 }}>Sélectionne un élément pour voir ses informations.</p></div>}
+              </aside>
+            </div>}
+            <div style={{ padding: "7px 10px", background: "#f1f5f9", borderTop: "1px solid #dbe3ee", color: "#475569", fontSize: 11 }}>{roleFileEntries.filter(entry => { const parent = entry.path.includes("/") ? entry.path.slice(0, entry.path.lastIndexOf("/")) : ""; return parent === roleFileCurrentFolder; }).length} élément(s) dans ce dossier · Double-clique sur un dossier pour l'ouvrir</div>
           </div>
           <p style={{ color: "#64748b", fontSize: 12 }}>Coché = interdit et invisible. Un dossier interdit masque son contenu. Décoche un fichier pour créer une exception d'accès s'il se trouve dans un dossier interdit.</p>
           <button disabled={savingRole} style={{ width: "100%", padding: 12, marginTop: 12, background: "#2563eb", color: "white", border: 0, borderRadius: 8, cursor: "pointer" }}>{savingRole ? "Enregistrement..." : editingRoleId ? "Enregistrer les modifications" : "Créer le rôle"}</button>
-          {editingRoleId && <button type="button" onClick={() => { setEditingRoleId(""); setRoleName(""); setRolePermissions(["accueil"]); setRoleFileRulesText(""); setRoleFileDenied({}); setMessagingAllowedIds([]); setMessagingRoleUsers([]); }} style={{ width: "100%", padding: 10, marginTop: 8, border: "1px solid #cbd5e1", borderRadius: 8, background: "white" }}>Annuler</button>}
+          {editingRoleId && <button type="button" onClick={() => { setEditingRoleId(""); setRoleName(""); setRolePermissions(["accueil"]); setRoleFileRulesText(""); setRoleFileDenied({}); setRoleFileCurrentFolder(""); setRoleFileSelectedEntry(null); setMessagingAllowedIds([]); setMessagingRoleUsers([]); }} style={{ width: "100%", padding: 10, marginTop: 8, border: "1px solid #cbd5e1", borderRadius: 8, background: "white" }}>Annuler</button>}
         </form>
         {roleError && <p style={{ color: "#dc2626" }}>{roleError}</p>}
         {roleSuccess && <p style={{ color: "#15803d" }}>{roleSuccess}</p>}
