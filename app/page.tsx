@@ -2060,7 +2060,7 @@ async function uploadFolder() {
     </footer>
   </div>
 )}
-        {odtPreviewEntry?.previewUrl && <OdtPreview url={odtPreviewEntry.previewUrl} fileName={odtPreviewEntry.name} onClose={() => setOdtPreviewEntry(null)} />}
+        {odtPreviewEntry?.previewUrl && <OdtPreview path={odtPreviewEntry.path} fileName={odtPreviewEntry.name} onClose={() => setOdtPreviewEntry(null)} />}
         {active === "messages" && <Messenger currentUserId={user.id} />}
 
         {isAdmin && active === "parametres" && <AdminSettings />}
